@@ -1,0 +1,29 @@
+{
+  "name": "rocketlane-mcp",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) server exposing the Rocketlane REST API v1.0 (64 endpoints) as tools for Claude, Cursor, and any other MCP-compatible client.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "rocketlane-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "rocketlane",
+    "claude",
+    "cursor",
+    "professional-services-automation",
+    "psa"
+  ],
+  "license": "MIT"
+}

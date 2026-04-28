@@ -1,0 +1,1670 @@
+openapi: 3.0.3
+info:
+  title: Rocketlane API v1.0
+  description: |-
+    Complete Rocketlane REST API collection with all 64 endpoints across 11 categories.
+
+    **Setup:**
+    1. Set the `api_key` variable to your Rocketlane API key
+    2. The `base_url` is pre-configured to `https://api.rocketlane.com/api/1.0`
+
+    **Authentication:** API key-based auth via the `api-key` header. Permissions match the creating user.
+
+    **Rate Limits:**
+    - GET-all endpoints: 60 requests/minute
+    - All other endpoints: 400 requests/minute
+
+    **Pagination:** Use `pageSize` (max 100) and `pageToken` query params.
+
+    **Filtering:** Use `field.operation=value` syntax (eq, gt, lt, ge, le, cn, nc).
+
+    Docs: https://developer.rocketlane.com
+  contact: {}
+  version: 1.0.0
+servers:
+- url: https://api.rocketlane.com/api/1.0
+security:
+- apiKey: []
+tags:
+- name: Tasks
+  description: Tasks endpoints (12 requests)
+- name: Fields
+  description: Fields endpoints (7 requests)
+- name: Projects
+  description: Projects endpoints (12 requests)
+- name: Resource Allocations
+  description: Resource Allocations endpoints (1 requests)
+- name: Phases
+  description: Phases endpoints (5 requests)
+- name: Time-Offs
+  description: Time-Offs endpoints (4 requests)
+- name: Users
+  description: Users endpoints (2 requests)
+- name: Spaces
+  description: Spaces endpoints (5 requests)
+- name: Time Tracking
+  description: Time Tracking endpoints (7 requests)
+- name: Space Documents
+  description: Space Documents endpoints (5 requests)
+- name: Invoices
+  description: Invoices endpoints (4 requests)
+paths:
+  /tasks/{id}:
+    get:
+      tags:
+      - Tasks
+      summary: Get task by Id
+      description: |-
+        Get task by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-task
+      operationId: getTaskById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    put:
+      tags:
+      - Tasks
+      summary: Update task by Id
+      description: |-
+        Update task by Id
+
+        Docs: https://developer.rocketlane.com/reference/update-task
+      operationId: updateTaskById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Update task by Id:
+                value: {}
+      responses:
+        "200":
+          description: ""
+    delete:
+      tags:
+      - Tasks
+      summary: Delete task by Id
+      description: |-
+        Delete task by Id
+
+        Docs: https://developer.rocketlane.com/reference/delete-task
+      operationId: deleteTaskById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /tasks/{id}/followers/remove:
+    post:
+      tags:
+      - Tasks
+      summary: Remove followers from a task
+      description: |-
+        Remove followers from a task
+
+        Docs: https://developer.rocketlane.com/reference/remove-followers-from-task
+      operationId: removeFollowersFromATask
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Remove followers from a task:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /tasks/{id}/dependencies/remove:
+    post:
+      tags:
+      - Tasks
+      summary: Remove dependencies from a task
+      description: |-
+        Remove dependencies from a task
+
+        Docs: https://developer.rocketlane.com/reference/remove-dependencies-from-task
+      operationId: removeDependenciesFromATask
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Remove dependencies from a task:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /tasks/{id}/assignees/remove:
+    post:
+      tags:
+      - Tasks
+      summary: Remove assignees from a task
+      description: |-
+        Remove assignees from a task
+
+        Docs: https://developer.rocketlane.com/reference/remove-assignees-from-task
+      operationId: removeAssigneesFromATask
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Remove assignees from a task:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /tasks/{id}/phase:
+    post:
+      tags:
+      - Tasks
+      summary: Move a task to a phase
+      description: |-
+        Move a task to a phase
+
+        Docs: https://developer.rocketlane.com/reference/move-task-to-given-phase
+      operationId: moveATaskToAPhase
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Move a task to a phase:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /tasks/{id}/followers:
+    post:
+      tags:
+      - Tasks
+      summary: Add followers to a task
+      description: |-
+        Add followers to a task
+
+        Docs: https://developer.rocketlane.com/reference/add-followers-to-task
+      operationId: addFollowersToATask
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Add followers to a task:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /tasks/{id}/dependencies:
+    post:
+      tags:
+      - Tasks
+      summary: Add dependencies to a task
+      description: |-
+        Add dependencies to a task
+
+        Docs: https://developer.rocketlane.com/reference/add-dependencies-to-task
+      operationId: addDependenciesToATask
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Add dependencies to a task:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /tasks/{id}/assignees:
+    post:
+      tags:
+      - Tasks
+      summary: Add assignees to a task
+      description: |-
+        Add assignees to a task
+
+        Docs: https://developer.rocketlane.com/reference/add-assignee-to-task
+      operationId: addAssigneesToATask
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Add assignees to a task:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /tasks:
+    get:
+      tags:
+      - Tasks
+      summary: Get all tasks
+      description: |-
+        Get all tasks
+
+        Docs: https://developer.rocketlane.com/reference/get-all-tasks
+      operationId: getAllTasks
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    post:
+      tags:
+      - Tasks
+      summary: Create a task
+      description: |-
+        Create a task
+
+        Docs: https://developer.rocketlane.com/reference/create-task
+      operationId: createATask
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Create a task:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /fields/{id}:
+    get:
+      tags:
+      - Fields
+      summary: Get field by Id
+      description: |-
+        Get field by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-field
+      operationId: getFieldById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    put:
+      tags:
+      - Fields
+      summary: Update field by Id
+      description: |-
+        Update field by Id
+
+        Docs: https://developer.rocketlane.com/reference/update-field
+      operationId: updateFieldById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Update field by Id:
+                value: {}
+      responses:
+        "200":
+          description: ""
+    delete:
+      tags:
+      - Fields
+      summary: Delete field by Id
+      description: |-
+        Delete field by Id
+
+        Docs: https://developer.rocketlane.com/reference/delete-field
+      operationId: deleteFieldById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /fields/{id}/options:
+    post:
+      tags:
+      - Fields
+      summary: Update field option
+      description: |-
+        Update field option
+
+        Docs: https://developer.rocketlane.com/reference/update-field-option
+      operationId: updateFieldOption
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Update field option:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /fields/{id}/options/add:
+    post:
+      tags:
+      - Fields
+      summary: Add field option
+      description: |-
+        Add field option
+
+        Docs: https://developer.rocketlane.com/reference/add-field-option
+      operationId: addFieldOption
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Add field option:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /fields:
+    get:
+      tags:
+      - Fields
+      summary: Get all fields
+      description: |-
+        Get all fields
+
+        Docs: https://developer.rocketlane.com/reference/get-all-fields
+      operationId: getAllFields
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    post:
+      tags:
+      - Fields
+      summary: Create a field
+      description: |-
+        Create a field
+
+        Docs: https://developer.rocketlane.com/reference/create-field
+      operationId: createAField
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Create a field:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /projects/{id}:
+    get:
+      tags:
+      - Projects
+      summary: Get project by Id
+      description: |-
+        Get project by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-project
+      operationId: getProjectById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    put:
+      tags:
+      - Projects
+      summary: Update project by Id
+      description: |-
+        Update project by Id
+
+        Docs: https://developer.rocketlane.com/reference/update-project
+      operationId: updateProjectById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Update project by Id:
+                value: {}
+      responses:
+        "200":
+          description: ""
+    delete:
+      tags:
+      - Projects
+      summary: Delete project by Id
+      description: |-
+        Delete project by Id
+
+        Docs: https://developer.rocketlane.com/reference/delete-project
+      operationId: deleteProjectById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /projects/{id}/placeholders/unassign:
+    post:
+      tags:
+      - Projects
+      summary: Unassign placeholders from user
+      description: |-
+        Unassign placeholders from user
+
+        Docs: https://developer.rocketlane.com/reference/unassign-placeholders
+      operationId: unassignPlaceholdersFromUser
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Unassign placeholders from user:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /projects/{id}/members/remove:
+    post:
+      tags:
+      - Projects
+      summary: Remove members from project
+      description: |-
+        Remove members from project
+
+        Docs: https://developer.rocketlane.com/reference/remove-members
+      operationId: removeMembersFromProject
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Remove members from project:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /projects/{id}/template/import:
+    post:
+      tags:
+      - Projects
+      summary: Import template to project
+      description: |-
+        Import template to project
+
+        Docs: https://developer.rocketlane.com/reference/import-template
+      operationId: importTemplateToProject
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Import template to project:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /projects/{id}/placeholders/assign:
+    post:
+      tags:
+      - Projects
+      summary: Assign placeholders to user
+      description: |-
+        Assign placeholders to user
+
+        Docs: https://developer.rocketlane.com/reference/assign-placeholders
+      operationId: assignPlaceholdersToUser
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Assign placeholders to user:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /projects/{id}/archive:
+    post:
+      tags:
+      - Projects
+      summary: Archive project by Id
+      description: |-
+        Archive project by Id
+
+        Docs: https://developer.rocketlane.com/reference/archiveproject
+      operationId: archiveProjectById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Archive project by Id:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /projects/{id}/members:
+    post:
+      tags:
+      - Projects
+      summary: Add members to project
+      description: |-
+        Add members to project
+
+        Docs: https://developer.rocketlane.com/reference/add-members
+      operationId: addMembersToProject
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Add members to project:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /projects:
+    get:
+      tags:
+      - Projects
+      summary: Get all projects
+      description: |-
+        Get all projects
+
+        Docs: https://developer.rocketlane.com/reference/get-all-projects
+      operationId: getAllProjects
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    post:
+      tags:
+      - Projects
+      summary: Create a project
+      description: |-
+        Create a project
+
+        Docs: https://developer.rocketlane.com/reference/create-project
+      operationId: createAProject
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Create a project:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /projects/{id}/placeholders:
+    post:
+      tags:
+      - Projects
+      summary: Get placeholders
+      description: |-
+        Get placeholders
+
+        Docs: https://developer.rocketlane.com/reference/get-placeholders
+      operationId: getPlaceholders
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Get placeholders:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /resource-allocations:
+    get:
+      tags:
+      - Resource Allocations
+      summary: Get all resource allocations
+      description: |-
+        Get all resource allocations
+
+        Docs: https://developer.rocketlane.com/reference/get-all-resource-allocations
+      operationId: getAllResourceAllocations
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /phases/{id}:
+    get:
+      tags:
+      - Phases
+      summary: Get phase by Id
+      description: |-
+        Get phase by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-phase
+      operationId: getPhaseById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    put:
+      tags:
+      - Phases
+      summary: Update phase by Id
+      description: |-
+        Update phase by Id
+
+        Docs: https://developer.rocketlane.com/reference/update-phase
+      operationId: updatePhaseById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Update phase by Id:
+                value: {}
+      responses:
+        "200":
+          description: ""
+    delete:
+      tags:
+      - Phases
+      summary: Delete phase by Id
+      description: |-
+        Delete phase by Id
+
+        Docs: https://developer.rocketlane.com/reference/delete-phase
+      operationId: deletePhaseById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /phases:
+    get:
+      tags:
+      - Phases
+      summary: Get all phases
+      description: |-
+        Get all phases
+
+        Docs: https://developer.rocketlane.com/reference/get-all-phases
+      operationId: getAllPhases
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    post:
+      tags:
+      - Phases
+      summary: Create a phase
+      description: |-
+        Create a phase
+
+        Docs: https://developer.rocketlane.com/reference/create-phase
+      operationId: createAPhase
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Create a phase:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /time-offs:
+    get:
+      tags:
+      - Time-Offs
+      summary: Get all time-offs
+      description: |-
+        Get all time-offs
+
+        Docs: https://developer.rocketlane.com/reference/get-all-timeoffs
+      operationId: getAllTimeOffs
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    post:
+      tags:
+      - Time-Offs
+      summary: Create a time-off
+      description: |-
+        Create a time-off
+
+        Docs: https://developer.rocketlane.com/reference/create-timeoff
+      operationId: createATimeOff
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Create a time-off:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /time-offs/{id}:
+    get:
+      tags:
+      - Time-Offs
+      summary: Get time-off by Id
+      description: |-
+        Get time-off by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-timeoff
+      operationId: getTimeOffById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    delete:
+      tags:
+      - Time-Offs
+      summary: Delete a time-off
+      description: |-
+        Delete a time-off
+
+        Docs: https://developer.rocketlane.com/reference/delete-timeoff
+      operationId: deleteATimeOff
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /users/{id}:
+    get:
+      tags:
+      - Users
+      summary: Get user by Id
+      description: |-
+        Get user by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-user
+      operationId: getUserById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /users:
+    get:
+      tags:
+      - Users
+      summary: Get all users
+      description: |-
+        Get all users
+
+        Docs: https://developer.rocketlane.com/reference/get-all-users
+      operationId: getAllUsers
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /spaces/{id}:
+    get:
+      tags:
+      - Spaces
+      summary: Get space by Id
+      description: |-
+        Get space by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-space
+      operationId: getSpaceById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    put:
+      tags:
+      - Spaces
+      summary: Update space by Id
+      description: |-
+        Update space by Id
+
+        Docs: https://developer.rocketlane.com/reference/update-space
+      operationId: updateSpaceById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Update space by Id:
+                value: {}
+      responses:
+        "200":
+          description: ""
+    delete:
+      tags:
+      - Spaces
+      summary: Delete space by Id
+      description: |-
+        Delete space by Id
+
+        Docs: https://developer.rocketlane.com/reference/delete-space
+      operationId: deleteSpaceById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /spaces:
+    get:
+      tags:
+      - Spaces
+      summary: Get all spaces
+      description: |-
+        Get all spaces
+
+        Docs: https://developer.rocketlane.com/reference/get-all-spaces
+      operationId: getAllSpaces
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    post:
+      tags:
+      - Spaces
+      summary: Create a space
+      description: |-
+        Create a space
+
+        Docs: https://developer.rocketlane.com/reference/create-space
+      operationId: createASpace
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Create a space:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /time-entries/{id}:
+    get:
+      tags:
+      - Time Tracking
+      summary: Get a time entry
+      description: |-
+        Get a time entry
+
+        Docs: https://developer.rocketlane.com/reference/get-time-entry
+      operationId: getATimeEntry
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    put:
+      tags:
+      - Time Tracking
+      summary: Update a time entry
+      description: |-
+        Update a time entry
+
+        Docs: https://developer.rocketlane.com/reference/update-time-entry
+      operationId: updateATimeEntry
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Update a time entry:
+                value: {}
+      responses:
+        "200":
+          description: ""
+    delete:
+      tags:
+      - Time Tracking
+      summary: Delete a time entry
+      description: |-
+        Delete a time entry
+
+        Docs: https://developer.rocketlane.com/reference/delete-time-entry
+      operationId: deleteATimeEntry
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /time-entries:
+    get:
+      tags:
+      - Time Tracking
+      summary: Get all time entries
+      description: |-
+        Get all time entries
+
+        Docs: https://developer.rocketlane.com/reference/get-all-time-entries
+      operationId: getAllTimeEntries
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    post:
+      tags:
+      - Time Tracking
+      summary: Create a time entry
+      description: |-
+        Create a time entry
+
+        Docs: https://developer.rocketlane.com/reference/create-time-entry
+      operationId: createATimeEntry
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Create a time entry:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /time-entries/search:
+    get:
+      tags:
+      - Time Tracking
+      summary: Search time entries (deprecated)
+      description: |-
+        Search time entries (deprecated)
+
+        Docs: https://developer.rocketlane.com/reference/search-time-entries
+      operationId: searchTimeEntriesDeprecated
+      responses:
+        "200":
+          description: ""
+  /time-entry-categories:
+    get:
+      tags:
+      - Time Tracking
+      summary: Get time entry categories
+      description: |-
+        Get time entry categories
+
+        Docs: https://developer.rocketlane.com/reference/get-time-entry-categories
+      operationId: getTimeEntryCategories
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /space-documents/{id}:
+    get:
+      tags:
+      - Space Documents
+      summary: Get space document by Id
+      description: |-
+        Get space document by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-space-document
+      operationId: getSpaceDocumentById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    put:
+      tags:
+      - Space Documents
+      summary: Update space document by Id
+      description: |-
+        Update space document by Id
+
+        Docs: https://developer.rocketlane.com/reference/update-space-document
+      operationId: updateSpaceDocumentById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Update space document by Id:
+                value: {}
+      responses:
+        "200":
+          description: ""
+    delete:
+      tags:
+      - Space Documents
+      summary: Delete space document by Id
+      description: |-
+        Delete space document by Id
+
+        Docs: https://developer.rocketlane.com/reference/delete-space-document
+      operationId: deleteSpaceDocumentById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /space-documents:
+    get:
+      tags:
+      - Space Documents
+      summary: Get all space documents
+      description: |-
+        Get all space documents
+
+        Docs: https://developer.rocketlane.com/reference/get-all-space-documents
+      operationId: getAllSpaceDocuments
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+    post:
+      tags:
+      - Space Documents
+      summary: Create a space document
+      description: |-
+        Create a space document
+
+        Docs: https://developer.rocketlane.com/reference/create-space-document
+      operationId: createASpaceDocument
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+            examples:
+              Create a space document:
+                value: {}
+      responses:
+        "200":
+          description: ""
+  /invoices/{id}/payments:
+    get:
+      tags:
+      - Invoices
+      summary: Get invoice payments
+      description: |-
+        Get invoice payments
+
+        Docs: https://developer.rocketlane.com/reference/get-invoice-payments
+      operationId: getInvoicePayments
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /invoices/{id}/line-items:
+    get:
+      tags:
+      - Invoices
+      summary: Get invoice line items
+      description: |-
+        Get invoice line items
+
+        Docs: https://developer.rocketlane.com/reference/get-invoice-line-items
+      operationId: getInvoiceLineItems
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /invoices/{id}:
+    get:
+      tags:
+      - Invoices
+      summary: Get invoice by Id
+      description: |-
+        Get invoice by Id
+
+        Docs: https://developer.rocketlane.com/reference/get-invoice
+      operationId: getInvoiceById
+      parameters:
+      - name: id
+        in: path
+        description: Resource ID
+        required: true
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+  /invoices:
+    get:
+      tags:
+      - Invoices
+      summary: Get all invoices
+      description: |-
+        Get all invoices
+
+        Docs: https://developer.rocketlane.com/reference/search-invoices
+      operationId: getAllInvoices
+      parameters:
+      - name: pageSize
+        in: query
+        description: Number of records per page (max 100)
+        required: false
+        schema:
+          type: string
+          example: "100"
+      - name: pageToken
+        in: query
+        description: Token for the next page (from previous response)
+        required: false
+        schema:
+          type: string
+          example: ""
+      responses:
+        "200":
+          description: ""
+components:
+  schemas: {}
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      name: api-key
+      in: header
