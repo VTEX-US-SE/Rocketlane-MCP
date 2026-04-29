@@ -55,7 +55,7 @@ rocketlane-mcp/
 ### 1. Clone and add your credentials
 
 ```bash
-git clone https://github.com/<your-org>/rocketlane-mcp.git
+git clone https://github.com/VTEX-US-SE/Rocketlane-MCP.git
 cd rocketlane-mcp
 
 # Option A — file-based (works for both implementations)
