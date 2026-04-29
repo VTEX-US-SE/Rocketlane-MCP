@@ -343,11 +343,6 @@ npx @modelcontextprotocol/inspector \
 - Treat the API key like a password. It grants the same access the issuing user has in Rocketlane.
 - For shared deployments, prefer the env-var path (`ROCKETLANE_API_KEY`) over checked-in files, and rotate keys via Rocketlane workspace settings.
 
----
-
-## License
-
-[MIT](LICENSE)
 
 ---
 
