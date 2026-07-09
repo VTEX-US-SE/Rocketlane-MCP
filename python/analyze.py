@@ -11,6 +11,7 @@ Kept dependency-free and side-effect-free so the SAME functions can back both th
 """
 from __future__ import annotations
 
+import datetime as _dt
 import re
 from collections import defaultdict
 from typing import Any
@@ -243,6 +244,65 @@ def _is_open(r):
     return bool(r["stage"]) and r["stage"] not in ("Won", "Lost")
 
 
+def _d(s):
+    """'YYYY-MM-DD' -> date, or None. Pure (no wall-clock)."""
+    try:
+        return _dt.date.fromisoformat(str(s)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _days_between(d1, d2):
+    """Whole days from d1 to d2 (both 'YYYY-MM-DD'); None if unparseable."""
+    a, b = _d(d1), _d(d2)
+    return (b - a).days if a and b else None
+
+
+def _status_open(r):
+    """Project not administratively closed (Completed/Cancelled)."""
+    return r["status"] not in ("Completed", "Cancelled")
+
+
+_SEV_ORDER = {"red": 0, "yellow": 1, "green": 2}
+_SEV_EMOJI = {"red": "🔴", "yellow": "🟡", "green": "🟢"}
+
+
+def opp_health(r, today, soon_days=14):
+    """Deterministic 🟢/🟡/🔴 + risk flags for ONE opportunity (a governance-review row).
+    Only computable-reliable signals — no updatedAt (bot-polluted), no invented scores."""
+    flags = []
+    is_open = _is_open(r)
+    if is_open and r["closed"] and r["closed"] < today:                 # 🔴 past forecast close, still open
+        n = _days_between(r["closed"], today)
+        flags.append(("red", f"vencida há {n}d" if n is not None else "close date vencida"))
+    if r["stage"] in ("Won", "Lost") and _status_open(r):               # 🔴 Won/Lost but not closed out
+        flags.append(("red", f"{r['stage']} mas ainda aberta"))
+    if not r["stage"]:                                                  # 🟡 unclassified
+        flags.append(("yellow", "sem stage"))
+    if r["stage"] and acvn(r["acv"]) is None:                           # 🟡 staged but no ACV
+        flags.append(("yellow", "sem ACV"))
+    if is_open and r["closed"] and today <= r["closed"]:                # 🟡 approaching forecast close
+        n = _days_between(today, r["closed"])
+        if n is not None and n <= soon_days:
+            flags.append(("yellow", f"fecha em {n}d"))
+    sev = "red" if any(f[0] == "red" for f in flags) else ("yellow" if flags else "green")
+    return {"health": _SEV_EMOJI[sev], "severity": sev, "flags": [f[1] for f in flags]}
+
+
+def opps_detail(items, today):
+    """Per-opportunity governance rows (health + flags), 🔴 first then by ACV desc.
+    Serves the 'governance review per opp' need SERVER-SIDE — the copilot renders the
+    table from this and never falls back to the (silently broken) owner filter."""
+    rows = []
+    for p, r in items:
+        rows.append({"projectId": p, "name": r["name"],
+                     "stage": r["stage"] or "(sem stage)", "owner": r["owner"],
+                     "acv": acvn(r["acv"]), "closed_forecast": r["closed"],
+                     "status": r["status"], **opp_health(r, today)})
+    rows.sort(key=lambda x: (_SEV_ORDER[x["severity"]], -(x["acv"] or 0)))
+    return rows
+
+
 def _first_human_member(p):
     for m in ((p.get("teamMembers") or {}).get("members") or []):
         nm = (f"{m.get('firstName', '')} {m.get('lastName', '')}".strip() or m.get("emailId") or "")
@@ -358,6 +418,8 @@ def se_digest(items, email, today):
     return {"se": email, "my_opps": total,
             "hygiene_nudges": {k: {"count": len(v), "opps": v} for k, v in nudges.items()},
             "my_pipeline": pipeline(mine, today),
+            "at_risk_overdue": overdue(mine, today),
+            "my_opps_detail": opps_detail(mine, today),
             "_coverage": covered("my opps", total, total, today)}
 
 
