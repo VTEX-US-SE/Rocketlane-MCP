@@ -371,6 +371,164 @@ def list_time_entries(
 
 
 # ---------------------------------------------------------------------------
+# High-level SE analytics tools (server-side pull + aggregate → small result).
+#
+# These give the Desktop copilot fast, reliable portfolio analytics WITHOUT the
+# in-chat 1MB/pagination wall: the whole pipeline runs here (outside the sandbox)
+# and returns only the small final result. Same analyze.py used by the Claude
+# Code `rocketlane` skill — single source of the win-rate/report/health logic.
+# ---------------------------------------------------------------------------
+
+import sys as _sys  # noqa: E402
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import analyze as _analyze  # noqa: E402
+except Exception:  # pragma: no cover
+    _analyze = None
+
+
+def _pull_all_projects(updated_since_ms: int | None = None, max_pages: int = 40) -> dict[str, Any]:
+    """Paginated /projects pull with archived + all custom fields (~8 calls)."""
+    q: dict[str, Any] = {"includeArchive.eq": "true", "includeAllFields": "true", "pageSize": 100}
+    if updated_since_ms is not None:
+        q["updatedAt.ge"] = int(updated_since_ms)
+    out: list[Any] = []
+    pages = 0
+    total = None
+    while True:
+        res = _call("GET", "/projects", q)
+        if res.get("error"):
+            return {"error": res}
+        body = res["body"] if isinstance(res.get("body"), dict) else {}
+        data = body.get("data") or body.get("results") or []
+        if isinstance(data, list):
+            out.extend(data)
+        pagination = body.get("pagination") if isinstance(body.get("pagination"), dict) else body
+        if total is None:
+            total = pagination.get("totalRecordCount")
+        pages += 1
+        token = pagination.get("nextPageToken")
+        if not token or pages >= max_pages:
+            break
+        q["pageToken"] = token
+    return {"projects": out, "total": total, "pages": pages}
+
+
+def _se_items(pulled: dict) -> list:
+    return _analyze.scope_se(_analyze.rows_from_projects(pulled["projects"]))
+
+
+@mcp.tool()
+def get_se_winrate(from_date: str | None = None, to_date: str | None = None) -> dict[str, Any]:
+    """
+    SE-team win-rate (opps from Template SE, templateId 520608). Runs the full
+    pull+aggregate server-side and returns a SMALL result (no 1MB wall).
+
+    Args:
+        from_date / to_date: 'YYYY-MM-DD' window. Defaults to the current calendar
+        half. For H1 2026 pass from_date=2026-01-01, to_date=2026-06-30.
+
+    Returns: {won, lost, strict, sensitivity, top_lost[...], loss_reason_fill, _provenance}.
+    """
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    import datetime as _dt
+    today = _dt.datetime.now().strftime("%Y-%m-%d")
+    start, end = (from_date, to_date) if from_date and to_date else _analyze.current_half(today)
+    wr = _analyze.winrate(_se_items(pulled), start, end)
+    wr["_provenance"] = {"source": "local MCP api-key", "universe": pulled["total"]}
+    return wr
+
+
+@mcp.tool()
+def get_se_report() -> dict[str, Any]:
+    """SE×Stage and Macro Region×Stage matrices (count + ACV) for Template SE opps. Server-side."""
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    out = _analyze.report(_se_items(pulled))
+    out["_provenance"] = {"source": "local MCP api-key", "universe": pulled["total"]}
+    return out
+
+
+@mcp.tool()
+def get_se_health() -> dict[str, Any]:
+    """SE portfolio hygiene: no-stage, Salesforce-owned, closed-missing-date, ACV-0, dups. Server-side."""
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    out = _analyze.health(_se_items(pulled))
+    out["_provenance"] = {"source": "local MCP api-key", "universe": pulled["total"]}
+    return out
+
+
+def _digest_prov(out: dict, pulled: dict) -> dict:
+    out["_provenance"] = {"source": "local MCP api-key", "universe": pulled["total"]}
+    return out
+
+
+@mcp.tool()
+def get_exec_digest(from_date: str | None = None, to_date: str | None = None) -> dict[str, Any]:
+    """
+    VP dashboard (Template SE), server-side → small result: data-quality scorecard by
+    Macro Region, org win-rate TREND across recent halves (strict + sensitivity), and
+    the Region×Stage open-pipeline funnel. Every block carries its coverage/denominator.
+    Optional from_date/to_date ('YYYY-MM-DD') pins the win-rate window instead of the trend.
+    """
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    import datetime as _dt
+    today = _dt.datetime.now().strftime("%Y-%m-%d")
+    return _digest_prov(_analyze.exec_digest(_se_items(pulled), today, from_date, to_date), pulled)
+
+
+@mcp.tool()
+def get_region_digest(macro_region: str) -> dict[str, Any]:
+    """
+    Macro-Region leader digest (Template SE), server-side: open-pipeline funnel by stage,
+    data-completeness by SE, and at-risk = opps whose Opp Closed Date is past but stage is
+    still open (a derivable overdue signal, no activity proxy). macro_region e.g. "EMEA-APAC",
+    "Brazil", "North LATAM", "South LATAM", "USA".
+    """
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    import datetime as _dt
+    today = _dt.datetime.now().strftime("%Y-%m-%d")
+    return _digest_prov(_analyze.region_digest(_se_items(pulled), macro_region, today), pulled)
+
+
+@mcp.tool()
+def get_se_digest(email: str) -> dict[str, Any]:
+    """
+    Individual SE digest (Template SE), server-side: data-hygiene nudges (my opps missing
+    stage / close date / ACV) + my open pipeline by stage. Matches on owner email OR team
+    membership. email e.g. "felipe.dias@vtex.com".
+    """
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    import datetime as _dt
+    today = _dt.datetime.now().strftime("%Y-%m-%d")
+    return _digest_prov(_analyze.se_digest(_se_items(pulled), email, today), pulled)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
