@@ -419,6 +419,46 @@ def _se_items(pulled: dict) -> list:
     return _analyze.scope_se(_analyze.rows_from_projects(pulled["projects"]))
 
 
+def _weekly_baseline(target_days: int = 7, min_days: int = 4):
+    """Read the skill's snapshot cache (~/.cache/rocketlane) for a ~7-day-ago baseline, for
+    week-over-week highlight/lowlight. Returns {'items', 'as_of'} or None (insufficient history
+    = no snapshot at least `min_days` old). The MCP is stateless per call but co-located with
+    the deterministic pipeline's snapshot store, so it reads that store rather than keeping its own."""
+    if _analyze is None:
+        return None
+    import datetime as _dt
+    import glob as _glob
+    cache = Path.home() / ".cache" / "rocketlane"
+    now = _dt.datetime.now()
+    best = None
+    for path in sorted(_glob.glob(str(cache / "snapshot-*.json"))):
+        try:
+            snap = json.loads(Path(path).read_text())
+            as_of = (snap.get("as_of") or "")[:19]
+            if not as_of:
+                continue
+            age = (now - _dt.datetime.fromisoformat(as_of)).days
+            if age < min_days:
+                continue
+            score = abs(age - target_days)
+            if best is None or score < best[0]:
+                best = (score, snap)
+        except Exception:
+            continue
+    if best is None:
+        return None
+    snap = best[1]
+    return {"items": _analyze.scope_se(_analyze.rows_from_projects(snap["projects"])),
+            "as_of": snap.get("as_of")}
+
+
+def _with_since(out: dict, baseline) -> dict:
+    """Stamp the movement block's `since` with the baseline's as_of, when movement was computed."""
+    if baseline and isinstance(out.get("movement"), dict) and out["movement"].get("status") == "ok":
+        out["movement"]["since"] = baseline["as_of"]
+    return out
+
+
 @mcp.tool()
 def get_se_winrate(from_date: str | None = None, to_date: str | None = None) -> dict[str, Any]:
     """
@@ -490,7 +530,10 @@ def get_exec_digest(from_date: str | None = None, to_date: str | None = None) ->
         return pulled
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
-    return _digest_prov(_analyze.exec_digest(_se_items(pulled), today, from_date, to_date), pulled)
+    bl = _weekly_baseline()
+    out = _analyze.exec_digest(_se_items(pulled), today, from_date, to_date,
+                               prev_items=(bl["items"] if bl else None))
+    return _digest_prov(_with_since(out, bl), pulled)
 
 
 @mcp.tool()
@@ -508,7 +551,10 @@ def get_region_digest(macro_region: str) -> dict[str, Any]:
         return pulled
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
-    return _digest_prov(_analyze.region_digest(_se_items(pulled), macro_region, today), pulled)
+    bl = _weekly_baseline()
+    out = _analyze.region_digest(_se_items(pulled), macro_region, today,
+                                 prev_items=(bl["items"] if bl else None))
+    return _digest_prov(_with_since(out, bl), pulled)
 
 
 @mcp.tool()
@@ -526,6 +572,95 @@ def get_se_digest(email: str) -> dict[str, Any]:
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
     return _digest_prov(_analyze.se_digest(_se_items(pulled), email, today), pulled)
+
+
+# ---------------------------------------------------------------------------
+# Presentation artifacts (render + URL registry)
+# ---------------------------------------------------------------------------
+
+try:
+    import render as _render  # noqa: E402
+except Exception:  # pragma: no cover
+    _render = None
+
+_URL_STORE = Path.home() / ".cache" / "rocketlane" / "artifact_urls.json"
+
+
+def _url_key(view: str, region: str | None) -> str:
+    return f"region:{region}" if view == "region" else view
+
+
+def _load_urls() -> dict:
+    try:
+        return json.loads(_URL_STORE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+@mcp.tool()
+def get_artifact_url(view: str, region: str | None = None) -> dict[str, Any]:
+    """Canonical bookmarked artifact URL for a view ('exec'|'region'|'se'), if one was
+    published before. Region needs `region`. Returns {url} or {url: null}. Used by the
+    scheduled Cowork task to REDEPLOY to the same URL (stable bookmark), not mint a new one."""
+    return {"key": _url_key(view, region), "url": _load_urls().get(_url_key(view, region))}
+
+
+@mcp.tool()
+def set_artifact_url(view: str, url: str, region: str | None = None) -> dict[str, Any]:
+    """Persist the artifact URL for a view after (re)publishing, so future runs redeploy to
+    the same URL. Call this right after creating/updating the artifact."""
+    urls = _load_urls()
+    urls[_url_key(view, region)] = url
+    _URL_STORE.parent.mkdir(parents=True, exist_ok=True)
+    _URL_STORE.write_text(json.dumps(urls, indent=2))
+    return {"ok": True, "key": _url_key(view, region), "url": url}
+
+
+@mcp.tool()
+def render_presentation(view: str, region: str | None = None, se: str | None = None) -> dict[str, Any]:
+    """
+    Build a SELF-CONTAINED HTML presentation artifact (screen-share-ready dashboard) for
+    Template SE numbers. view: 'exec' (org) | 'region' (needs `region`, e.g. "EMEA-APAC")
+    | 'se' (needs `se` email). Returns {html, view, url, instructions}.
+
+    IMPORTANT for the caller: create/redeploy an Artifact whose ENTIRE content is the
+    returned `html`, VERBATIM — never retype numbers, never edit the HTML. Numbers are
+    checksum-protected (a red banner fires if the blob is corrupted). Then call
+    `set_artifact_url(view, url[, region])` with the resulting artifact URL, and (scheduled
+    runs) post that URL to the audience's Slack channel.
+    """
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    if _render is None:
+        return {"error": "render module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    import datetime as _dt
+    now = _dt.datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    items = _se_items(pulled)
+    bl = _weekly_baseline()
+    prev = bl["items"] if bl else None
+    if view == "exec":
+        digest = _with_since(_analyze.exec_digest(items, today, prev_items=prev), bl)
+    elif view == "region":
+        if not region:
+            return {"error": "region required for view='region' (e.g. 'EMEA-APAC')"}
+        digest = _with_since(_analyze.region_digest(items, region, today, prev_items=prev), bl)
+    elif view == "se":
+        if not se:
+            return {"error": "se (email) required for view='se'"}
+        digest = _analyze.se_digest(items, se, today)
+    else:
+        return {"error": "view must be 'exec' | 'region' | 'se'"}
+    prov = {"source": "local MCP api-key", "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"),
+            "universe": pulled["total"]}
+    html = _render.build_artifact(view, digest, prov, now.strftime("%Y-%m-%dT%H:%M:%S"))
+    key = _url_key(view, region)
+    return {"view": view, "key": key, "html": html, "url": _load_urls().get(key),
+            "instructions": "Create/redeploy an artifact whose ENTIRE content is `html`, "
+                            "verbatim. Then call set_artifact_url(view, url[, region])."}
 
 
 # ---------------------------------------------------------------------------

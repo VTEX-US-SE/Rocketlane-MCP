@@ -19,6 +19,10 @@ from typing import Any
 # SE-team discriminator — decision 2026-07-07: Template SE only, ignore "Template SE - B2B".
 SE_TEMPLATE_IDS = {"520608"}
 
+# Canonical Opportunity Stage order (for SE×Stage matrices / column ordering).
+STAGE_ORDER = ["Qualification", "Scope & Validate", "Active Pursuit", "Proposal",
+               "Negotiate", "Commit & Signing", "Won", "Lost"]
+
 # Macro Region normalization (free-text field, account-specific). Single source of truth.
 _MACRO_REGION_MAP = {"United States": "USA", "EMEA - APAC": "EMEA-APAC"}
 
@@ -407,6 +411,43 @@ def _my_items(items, email):
             if r["owner_email"].lower() == e or e in [x.lower() for x in r["team_emails"]]]
 
 
+def se_by_stage(items):
+    """Opportunity count per SE (owner) × stage — the region leader's 'opps per SE by stage'.
+    Rows alphabetical by owner (a workload view, NOT a performance ranking). '(no stage)'
+    is an explicit last column, never hidden."""
+    by_owner: dict[str, dict] = {}
+    present: set[str] = set()
+    for _, r in items:
+        owner = r["owner"] or "(no owner)"
+        stage = r["stage"] or "(no stage)"
+        by_owner.setdefault(owner, {})
+        by_owner[owner][stage] = by_owner[owner].get(stage, 0) + 1
+        present.add(stage)
+    cols = [s for s in STAGE_ORDER if s in present]
+    for s in sorted(present):  # any non-canonical stage, defensively, before (no stage)
+        if s not in cols and s != "(no stage)":
+            cols.append(s)
+    if "(no stage)" in present:
+        cols.append("(no stage)")
+    rows = [{"owner": o, "counts": {c: by_owner[o].get(c, 0) for c in cols},
+             "total": sum(by_owner[o].values())} for o in sorted(by_owner)]
+    return {"columns": cols, "rows": rows, "total": sum(r["total"] for r in rows)}
+
+
+def top_opps(items, today, n=5):
+    """Top-N opportunities by ACV, each carrying its health status (🔴/🟡/🟢), plus a
+    status-count summary — the region leader's 'top 5 opps categorized by status'."""
+    scored = []
+    summary = {"red": 0, "yellow": 0, "green": 0}
+    for p, r in items:
+        h = opp_health(r, today)
+        summary[h["severity"]] = summary.get(h["severity"], 0) + 1
+        scored.append({"projectId": p, "name": r["name"], "stage": r["stage"] or "(no stage)",
+                       "owner": r["owner"], "acv": acvn(r["acv"]), "closed_forecast": r["closed"], **h})
+    top = sorted(scored, key=lambda x: -(x["acv"] or 0))[:n]
+    return {"summary": summary, "top": top}
+
+
 def se_digest(items, email, today):
     mine = _my_items(items, email)
     total = len(mine)
@@ -423,14 +464,63 @@ def se_digest(items, email, today):
             "_coverage": covered("my opps", total, total, today)}
 
 
-def region_digest(items, macro, today):
+def _stage_idx(s):
+    try:
+        return STAGE_ORDER.index(s)
+    except ValueError:
+        return -1
+
+
+def week_movement(old, new, today, since=None):
+    """Week-over-week highlight/lowlight from two {pid: row} snapshots. DETERMINISTIC and
+    STRUCTURED (kind/opp/acv/from/to — the template formats the sentence; never LLM prose).
+    highlight: Won > stage advance > big new opp. lowlight: Lost > slipped past close > regress."""
+    if not old:
+        return {"status": "insufficient_history", "highlights": [], "lowlights": [], "since": since}
+    highs, lows = [], []
+    for pid, r in new.items():
+        o = old.get(pid)
+        acv = acvn(r["acv"]) or 0
+        ns, os_ = r["stage"], (o["stage"] if o else "")
+        if ns == "Won" and (not o or os_ != "Won"):
+            highs.append({"kind": "won", "opp": r["name"], "acv": acv})
+        elif ns == "Lost" and (not o or os_ != "Lost"):
+            lows.append({"kind": "lost", "opp": r["name"], "acv": acv})
+        elif o and os_ and ns and os_ != ns and ns not in ("Won", "Lost") and os_ not in ("Won", "Lost"):
+            if _stage_idx(ns) > _stage_idx(os_):
+                highs.append({"kind": "advance", "opp": r["name"], "acv": acv, "from": os_, "to": ns})
+            elif _stage_idx(ns) < _stage_idx(os_):
+                lows.append({"kind": "regress", "opp": r["name"], "acv": acv, "from": os_, "to": ns})
+        if not o and ns not in ("Won", "Lost"):
+            highs.append({"kind": "new", "opp": r["name"], "acv": acv})
+        if o and _is_open(r) and r["closed"] and r["closed"] < today and (not o["closed"] or o["closed"] >= today):
+            lows.append({"kind": "slipped", "opp": r["name"], "acv": acv})
+    hr = {"won": 0, "advance": 1, "new": 2}
+    lr = {"lost": 0, "slipped": 1, "regress": 2}
+    highs.sort(key=lambda x: (hr.get(x["kind"], 9), -(x["acv"] or 0)))
+    lows.sort(key=lambda x: (lr.get(x["kind"], 9), -(x["acv"] or 0)))
+    return {"status": "ok", "highlights": highs[:2], "lowlights": lows[:2], "since": since}
+
+
+def _movement(cur_items, prev_items, today):
+    if prev_items is None:
+        return {"status": "insufficient_history", "highlights": [], "lowlights": []}
+    return week_movement({p: r for p, r in prev_items}, {p: r for p, r in cur_items}, today)
+
+
+def region_digest(items, macro, today, prev_items=None):
     reg = [(p, r) for p, r in items if r["macro"] == macro]
     total = len(reg)
+    prev_reg = ([(p, r) for p, r in prev_items if r["macro"] == macro]
+                if prev_items is not None else None)
     return {"region": macro, "opps": total,
             "funnel": pipeline(reg, today),
+            "se_by_stage": se_by_stage(reg),
+            "top_opps": top_opps(reg, today),
             "hygiene_by_se": hygiene_by_owner(reg),
             "at_risk_overdue": overdue(reg, today),
             "no_stage": sum(1 for _, r in reg if not r["stage"]),
+            "movement": _movement(reg, prev_reg, today),
             "_coverage": covered("region opps", total, total, today)}
 
 
@@ -448,7 +538,7 @@ def half_windows(today, n=4):
     return out
 
 
-def exec_digest(items, today, start=None, end=None):
+def exec_digest(items, today, start=None, end=None, prev_items=None):
     # Win-rate: a trend across recent halves (a single "current half" is near-empty
     # early in a half — the VP wants the trajectory). Custom window if given.
     if start and end:
@@ -458,5 +548,6 @@ def exec_digest(items, today, start=None, end=None):
     return {"as_of": today,
             "data_quality_scorecard": scorecard(items, today),
             "org_winrate_trend": wr_trend,
+            "movement": _movement(items, prev_items, today),
             "pipeline_region_stage": {reg: pipeline([(p, r) for p, r in items if r["macro"] == reg], today)
                                       for reg in sorted({r["macro"] for _, r in items})}}

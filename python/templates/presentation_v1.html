@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SE Governance — Dashboard</title>
+<style>
+  :root{
+    --bg:#0F1115; --card:#171B22; --card2:#1E232C; --text:#F5F7FA; --muted:#8A93A2;
+    --pink:#F71963; --amber:#F6B93B; --red:#FF5A5F; --green:#3ED598; --line:#272E39;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.45;
+       -webkit-font-smoothing:antialiased;padding:0 0 64px}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 40px}
+  .fade{opacity:0;animation:fade .5s ease forwards}
+  @keyframes fade{to{opacity:1}}
+  .ribbon{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);
+          padding:10px 40px;border-bottom:1px solid var(--line);background:#12151b}
+  .ribbon.stale{color:#0F1115;background:var(--amber);font-weight:600}
+  .hero{padding:64px 0 40px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:26px;font-weight:600;letter-spacing:-.01em}
+  .hero .sub{color:var(--muted);font-size:13px;margin-top:6px}
+  .heroes{display:flex;gap:48px;flex-wrap:wrap;margin-top:32px}
+  .bignum{font-size:80px;font-weight:700;line-height:1;letter-spacing:-.03em}
+  .bignum.pink{color:var(--pink)}
+  .biglabel{color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.06em;margin-top:8px}
+  .micro{color:var(--muted);font-size:12px;margin-top:6px;max-width:520px}
+  section{padding:36px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:18px}
+  .grid{display:grid;gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .chip{display:inline-block;font-size:11px;color:var(--muted);border:1px solid var(--line);
+        border-radius:20px;padding:2px 10px;margin-left:8px;vertical-align:middle}
+  .chip.warn{color:#0F1115;background:var(--amber);border-color:var(--amber);font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:middle}
+  .dot.red{background:var(--red)} .dot.yellow{background:var(--amber)} .dot.green{background:var(--green)}
+  .flag{display:inline-block;font-size:11px;color:var(--muted);background:var(--card2);
+        border-radius:6px;padding:1px 7px;margin:0 4px 4px 0}
+  .foot{color:var(--muted);font-size:12px;padding-top:28px;line-height:1.8}
+  .caveat{color:var(--muted);font-size:12px;margin-top:10px}
+  .bar-row{display:flex;align-items:center;gap:12px;margin:7px 0}
+  .bar-label{width:150px;font-size:13px;color:var(--text);flex:none}
+  .bar-track{flex:1;height:22px;background:var(--card2);border-radius:5px;overflow:hidden}
+  .bar-fill{height:100%;background:var(--pink);opacity:.85}
+  .bar-val{width:150px;text-align:right;font-size:13px;color:var(--muted);flex:none;font-variant-numeric:tabular-nums}
+  .nostage{color:var(--amber)}
+  #err{display:none;position:fixed;inset:0;background:#2A0A0E;color:#fff;z-index:9999;
+       padding:80px 40px;font-family:var(--font)}
+  #err h1{color:var(--red);font-size:28px;margin-bottom:16px}
+</style>
+</head>
+<body>
+  <div id="err"><h1>⚠️ DATA INTEGRITY CHECK FAILED</h1>
+    <p>Este relatório foi corrompido ao ser gerado. <b>Não use estes números.</b> Regenere o artifact (peça o relatório de novo ao copilot).</p></div>
+  <div id="app"></div>
+
+  <script type="application/json" id="data"
+          data-checksum="__CHECKSUM__" data-template-version="__TEMPLATE_VERSION__" data-view="__VIEW__">__DATA__</script>
+
+  <script>
+  (function(){
+    "use strict";
+    // --- FNV-1a 32-bit over UTF-8 bytes (MUST match render.py._fnv1a_hex) ---
+    function fnv1a(str){
+      var bytes = new TextEncoder().encode(str);
+      var h = 0x811c9dc5;
+      for (var i=0;i<bytes.length;i++){ h ^= bytes[i]; h = Math.imul(h, 0x01000193) >>> 0; }
+      return ("0000000" + h.toString(16)).slice(-8);
+    }
+    var node = document.getElementById("data");
+    var raw = node.textContent;
+    var expected = node.getAttribute("data-checksum");
+    if (fnv1a(raw) !== expected){ document.getElementById("err").style.display="block"; return; }
+    var P;
+    try { P = JSON.parse(raw); } catch(e){ document.getElementById("err").style.display="block"; return; }
+
+    // --- helpers ---
+    function e(tag, cls, txt){ var n=document.createElement(tag); if(cls)n.className=cls; if(txt!=null)n.textContent=txt; return n; }
+    function usd(n){ if(n==null||isNaN(n)) return "—";
+      var a=Math.abs(n);
+      if(a>=1e6) return "$"+(n/1e6).toFixed(2).replace(/\.?0+$/,"")+"M";
+      if(a>=1e3) return "$"+(n/1e3).toFixed(0)+"K";
+      return "$"+Math.round(n); }
+    function pct(x){ return x==null?"—":Math.round(x*100)+"%"; }
+    function covChip(c){ if(!c) return null;
+      var t=(c.n!=null?c.n:"?")+"/"+(c.of!=null?c.of:"?")+" · "+pct(c.coverage);
+      var ch=e("span","chip",t); if(c.coverage!=null && c.coverage<0.7) ch.className="chip warn"; return ch; }
+    function num(v){ var t=e("td","num"); t.textContent=v; return t; }
+    function barRow(label, val, frac, cls){
+      var row=e("div","bar-row");
+      row.appendChild(e("div","bar-label",label));
+      var track=e("div","bar-track"); var fill=e("div","bar-fill");
+      fill.style.width=Math.max(1,Math.round((frac||0)*100))+"%"; if(cls) fill.style.background=cls;
+      track.appendChild(fill); row.appendChild(track);
+      row.appendChild(e("div","bar-val",val)); return row;
+    }
+    function section(title, chip){ var s=e("section"); var h=e("h2",null,title); if(chip)h.appendChild(chip); s.appendChild(h); return s; }
+    function app(){ return document.getElementById("app"); }
+    function wrap(node){ var w=e("div","wrap"); w.appendChild(node); return w; }
+
+    // --- freshness ribbon ---
+    function ribbon(prov, gen){
+      var asof=(prov&&prov.as_of)?String(prov.as_of).slice(0,10):"?";
+      var g=gen?String(gen).slice(0,16).replace("T"," "):"?";
+      var r=e("div","ribbon");
+      r.textContent="AS OF "+asof+" · gerado "+g+" · atualiza semanalmente — não é live";
+      try{ var d=new Date(asof); if(!isNaN(d) && (Date.now()-d.getTime())>8*864e5) r.className="ribbon stale"; }catch(x){}
+      return r;
+    }
+    // --- hero ---
+    function hero(title, sub, tiles){
+      var h=e("div","hero"); var w=e("div","wrap");
+      w.appendChild(e("h1",null,title)); if(sub) w.appendChild(e("div","sub",sub));
+      var hs=e("div","heroes");
+      tiles.forEach(function(t){
+        var box=e("div");
+        var bn=e("div","bignum"+(t.pink?" pink":"")); bn.textContent=t.value; box.appendChild(bn);
+        box.appendChild(e("div","biglabel",t.label));
+        if(t.micro) box.appendChild(e("div","micro",t.micro));
+        hs.appendChild(box);
+      });
+      w.appendChild(hs); h.appendChild(w); return h;
+    }
+    // win-rate band string
+    function band(w){ if(!w||(w.won+w.lost)===0) return null;
+      return Math.round(w.strict*100)+"–"+Math.round(w.sensitivity*100)+"%"; }
+    function latestHalf(trend){ // first key with data
+      var ks=Object.keys(trend||{});
+      for(var i=0;i<ks.length;i++){ var w=trend[ks[i]]; if(w && (w.won+w.lost)>0) return {label:ks[i], w:w}; }
+      return ks.length?{label:ks[0], w:trend[ks[0]]}:null;
+    }
+
+    // ================= EXEC =================
+    function renderExec(P){
+      var d=P.digest, prov=P.prov||{};
+      app().appendChild(ribbon(prov, P.generated_ts));
+      var sc=(d.data_quality_scorecard&&d.data_quality_scorecard.overall)||{};
+      var lh=latestHalf(d.org_winrate_trend);
+      // pipeline totals across regions
+      var prs=d.pipeline_region_stage||{}; var totAcv=0, totCnt=0;
+      Object.keys(prs).forEach(function(r){ totAcv+=prs[r].open_acv||0; totCnt+=prs[r].open_count||0; });
+      var tiles=[{value:usd(totAcv), label:"ACV de pipeline aberto", pink:true, micro:totCnt+" oportunidades abertas"}];
+      if(lh){ tiles.push({value:band(lh.w)||"—", label:"Win-rate "+lh.label,
+        micro:"Banda: estrito conta só Won/Lost explícitos; sensibilidade inclui fechados sem data. "+lh.w.won+"W / "+lh.w.lost+"L"}); }
+      app().appendChild(hero("SE Governance — Visão Executiva", "Template SE · fonte "+(prov.source||"Rocketlane"), tiles));
+
+      // win-rate trend band chart
+      var s1=section("Win-rate — trend por semestre");
+      var w1=e("div","wrap"); var trend=d.org_winrate_trend||{};
+      Object.keys(trend).forEach(function(k){ var w=trend[k];
+        if((w.won+w.lost)===0){ w1.appendChild(barRow(k,"n<5 — não reportado",0,"#3a4150")); return; }
+        w1.appendChild(barRow(k, band(w)+" · "+w.won+"W/"+w.lost+"L", w.sensitivity, null));
+      });
+      w1.appendChild(e("div","caveat","Loss reason está 0% preenchido no Rocketlane — não é possível reportar \"por que perdemos\" a partir dele."));
+      s1.appendChild(w1); app().appendChild(s1);
+
+      // pipeline by region (ACV)
+      var s2=section("Pipeline aberto por região (ACV)");
+      var w2=e("div","wrap");
+      var regs=Object.keys(prs).map(function(r){return {r:r, o:prs[r]};}).sort(function(a,b){return (b.o.open_acv||0)-(a.o.open_acv||0);});
+      var maxA=Math.max.apply(null,regs.map(function(x){return x.o.open_acv||0}).concat([1]));
+      regs.forEach(function(x){ if(!x.o.open_count) return;
+        var cov=x.o._coverage?(" · cob "+pct(x.o._coverage.coverage)):"";
+        w2.appendChild(barRow(x.r, usd(x.o.open_acv)+" ("+x.o.open_count+")"+cov, (x.o.open_acv||0)/maxA, null));
+      });
+      w2.appendChild(e("div","caveat","GMV omitido (outliers inflam o pipeline aberto a ~$17bi) — ACV é a medida confiável."));
+      s2.appendChild(w2); app().appendChild(s2);
+
+      // data-quality scorecard
+      var s3=section("Confiança do dado (governança)");
+      var w3=e("div","wrap");
+      w3.appendChild(barRow("Com stage", pct(sc.pct_staged), sc.pct_staged, "var(--green)"));
+      w3.appendChild(barRow("Owner atribuído", 1-(sc.pct_salesforce_owned||0)?pct(1-(sc.pct_salesforce_owned||0)):"—", 1-(sc.pct_salesforce_owned||0), "var(--green)"));
+      w3.appendChild(barRow("Com região", 1-(sc.pct_missing_region||0)?pct(1-(sc.pct_missing_region||0)):"—", 1-(sc.pct_missing_region||0), "var(--green)"));
+      w3.appendChild(e("div","caveat","Base: "+(sc.total!=null?sc.total:"?")+" oportunidades Template SE. Quanto maior a cobertura, mais confiáveis os números acima."));
+      s3.appendChild(w3); app().appendChild(s3);
+
+      // top lost
+      if(lh && lh.w.top_lost && lh.w.top_lost.length){
+        var s4=section("Maiores perdas — "+lh.label);
+        var w4=e("div","wrap"); var t=e("table");
+        var hr=e("tr"); ["Oportunidade","Região","Fechada","ACV"].forEach(function(c,i){ var th=e("th",i===3?"num":null,c); hr.appendChild(th);}); t.appendChild(hr);
+        lh.w.top_lost.slice(0,5).forEach(function(o){ var tr=e("tr");
+          tr.appendChild(e("td",null,o.name||"—")); tr.appendChild(e("td",null,o.macro||"—"));
+          tr.appendChild(e("td",null,(o.closed||"—"))); tr.appendChild(num(usd(o.acv))); t.appendChild(tr); });
+        w4.appendChild(t); s4.appendChild(w4); app().appendChild(s4);
+      }
+      footer(prov, P);
+    }
+
+    // ================= REGION =================
+    function renderRegion(P){
+      var d=P.digest, prov=P.prov||{};
+      app().appendChild(ribbon(prov, P.generated_ts));
+      var f=d.funnel||{};
+      app().appendChild(hero("SE Governance — "+(d.region||"Região"),
+        "Template SE · fonte "+(prov.source||"Rocketlane"),
+        [{value:usd(f.open_acv), label:"ACV de pipeline aberto", pink:true, micro:(f.open_count||0)+" abertas · "+(d.opps||0)+" no total"}]));
+
+      // funnel by stage
+      var s1=section("Funil aberto por estágio", covChip(f._coverage));
+      var w1=e("div","wrap"); var bs=f.by_stage||{};
+      var stages=Object.keys(bs).map(function(k){return {k:k,c:bs[k]};}).sort(function(a,b){return (b.c.acv||0)-(a.c.acv||0);});
+      var maxA=Math.max.apply(null,stages.map(function(x){return x.c.acv||0}).concat([1]));
+      stages.forEach(function(x){ w1.appendChild(barRow(x.k, usd(x.c.acv)+" ("+x.c.count+")", (x.c.acv||0)/maxA)); });
+      if(d.no_stage) w1.appendChild(e("div","caveat nostage","⚠ "+d.no_stage+" oportunidades sem stage (fora do funil até serem classificadas)."));
+      s1.appendChild(w1); app().appendChild(s1);
+
+      // at-risk overdue
+      var ov=d.at_risk_overdue||{count:0,opps:[]};
+      var s2=section("At-risk — close date vencida & ainda aberta ("+ov.count+")");
+      var w2=e("div","wrap"); var t=e("table");
+      var hr=e("tr"); ["Oportunidade","Estágio","Owner","ACV"].forEach(function(c,i){ hr.appendChild(e("th",i===3?"num":null,c));}); t.appendChild(hr);
+      (ov.opps||[]).filter(function(o){return o.acv;}).sort(function(a,b){return (b.acv||0)-(a.acv||0);}).slice(0,8).forEach(function(o){
+        var tr=e("tr"); tr.appendChild(e("td",null,o.name||"—")); tr.appendChild(e("td",null,o.stage||"—"));
+        tr.appendChild(e("td",null,o.owner||"—")); tr.appendChild(num(usd(o.acv))); t.appendChild(tr); });
+      w2.appendChild(t); s2.appendChild(w2); app().appendChild(s2);
+
+      // hygiene by SE — ALPHABETICAL (never ranked)
+      var s3=section("Higiene por SE (completude de stage)");
+      var w3=e("div","wrap"); var hy=d.hygiene_by_se||{};
+      Object.keys(hy).sort().forEach(function(se){ var h=hy[se]; var comp=h.completeness==null?0:h.completeness;
+        var label=se+(comp<0.7?"  ⚠":"");
+        w3.appendChild(barRow(label, pct(comp)+" ("+h.total+")", comp, comp<0.7?"var(--amber)":"var(--green)")); });
+      w3.appendChild(e("div","caveat","Ordem alfabética — completude de dado, não ranking de performance."));
+      s3.appendChild(w3); app().appendChild(s3);
+      footer(prov, P);
+    }
+
+    // ================= SE =================
+    function renderSE(P){
+      var d=P.digest, prov=P.prov||{};
+      app().appendChild(ribbon(prov, P.generated_ts));
+      var mp=d.my_pipeline||{};
+      app().appendChild(hero("Minha carteira — "+(d.se||""),
+        "Template SE · fonte "+(prov.source||"Rocketlane"),
+        [{value:usd(mp.open_acv), label:"Meu ACV aberto", pink:true, micro:(mp.open_count||0)+" abertas · "+(d.my_opps||0)+" no total"}]));
+
+      var ov=d.at_risk_overdue||{count:0};
+      if(ov.count){ var sb=section("⚠ Precisa de você agora");
+        var wb=e("div","wrap"); wb.appendChild(e("div","card", ov.count+" oportunidade(s) com close date vencida e ainda abertas — veja a tabela abaixo."));
+        sb.appendChild(wb); app().appendChild(sb); }
+
+      // hygiene nudges checklist
+      var nud=d.hygiene_nudges||{};
+      var s1=section("5 minutos para corrigir");
+      var w1=e("div","wrap");
+      [["no_stage","Sem stage"],["no_close_date","Sem data de fechamento"],["no_acv","Sem ACV"]].forEach(function(p){
+        var g=nud[p[0]]||{count:0,opps:[]}; var card=e("div","card");
+        card.appendChild(e("div",null,(g.count?("🔧 "):("✅ "))+p[1]+": "+g.count));
+        (g.opps||[]).slice(0,6).forEach(function(o){ card.appendChild(e("div","flag", o.name||("#"+o.projectId))); });
+        w1.appendChild(card);
+      });
+      s1.appendChild(w1); app().appendChild(s1);
+
+      // per-opp detail (sorted by severity, server-side)
+      var s2=section("Minhas oportunidades");
+      var w2=e("div","wrap"); var t=e("table");
+      var hr=e("tr"); ["","Oportunidade","Estágio","ACV","Fechamento","Flags"].forEach(function(c,i){ hr.appendChild(e("th",i===3?"num":null,c));}); t.appendChild(hr);
+      (d.my_opps_detail||[]).forEach(function(o){ var tr=e("tr");
+        var td0=e("td"); var dot=e("span","dot "+(o.severity||"green")); td0.appendChild(dot); tr.appendChild(td0);
+        tr.appendChild(e("td",null,o.name||"—")); tr.appendChild(e("td",null,o.stage||"—"));
+        tr.appendChild(num(usd(o.acv))); tr.appendChild(e("td",null,o.closed_forecast||"—"));
+        var tf=e("td"); (o.flags||[]).forEach(function(fl){ tf.appendChild(e("span","flag",fl)); }); tr.appendChild(tf);
+        t.appendChild(tr); });
+      w2.appendChild(t); s2.appendChild(w2); app().appendChild(s2);
+      footer(prov, P);
+    }
+
+    function footer(prov, P){
+      var s=e("section"); var w=e("div","wrap"); var f=e("div","foot");
+      f.appendChild(e("div",null,"Fonte: "+(prov.source||"Rocketlane (api-key)")+" · universo "+(prov.universe!=null?prov.universe:"?")+" · Template SE (520608)"));
+      f.appendChild(e("div",null,"as_of "+((prov.as_of||"?"))+" · template "+(P.template_version||"?")+" · gerado "+(P.generated_ts||"?")));
+      f.appendChild(e("div",null,"✓ integridade dos números verificada (checksum)"));
+      w.appendChild(f); s.appendChild(w); app().appendChild(s);
+      document.body.classList.add("fade");
+    }
+
+    var R={exec:renderExec, region:renderRegion, se:renderSE};
+    (R[P.view]||function(){ document.getElementById("err").style.display="block"; })(P);
+  })();
+  </script>
+</body>
+</html>
