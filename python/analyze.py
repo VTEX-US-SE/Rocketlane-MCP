@@ -32,7 +32,7 @@ STAGE_ORDER = ["Qualification", "Active Pursuit", "Scope & Validate", "Proposal"
 
 def normalize_macro_region(r: str | None) -> str:
     if not r:
-        return "(sem região)"
+        return "(no region)"
     r = r.strip()
     return _MACRO_REGION_MAP.get(r, r)
 
@@ -218,7 +218,7 @@ def diff_snapshots(old: dict[str, dict], new: dict[str, dict]) -> list[dict]:
         if pid not in old:
             alerts.append({"projectId": pid, "name": nr["name"], "eventType": "PROJECT_CREATED",
                            "resourceType": "PROJECT",
-                           "note": "opp nova" + ("" if nr["stage"] else " sem stage")})
+                           "note": "new opp" + ("" if nr["stage"] else " (no stage)")})
             continue
         orow = old[pid]
         changed = {f: {"from": orow.get(f), "to": nr.get(f)} for f in watched if orow.get(f) != nr.get(f)}
@@ -278,17 +278,17 @@ def opp_health(r, today, soon_days=14):
     is_open = _is_open(r)
     if is_open and r["closed"] and r["closed"] < today:                 # 🔴 past forecast close, still open
         n = _days_between(r["closed"], today)
-        flags.append(("red", f"vencida há {n}d" if n is not None else "close date vencida"))
+        flags.append(("red", f"overdue {n}d" if n is not None else "close date overdue"))
     if r["stage"] in ("Won", "Lost") and _status_open(r):               # 🔴 Won/Lost but not closed out
-        flags.append(("red", f"{r['stage']} mas ainda aberta"))
+        flags.append(("red", f"{r['stage']} but still open"))
     if not r["stage"]:                                                  # 🟡 unclassified
-        flags.append(("yellow", "sem stage"))
+        flags.append(("yellow", "no stage"))
     if r["stage"] and acvn(r["acv"]) is None:                           # 🟡 staged but no ACV
-        flags.append(("yellow", "sem ACV"))
+        flags.append(("yellow", "no ACV"))
     if is_open and r["closed"] and today <= r["closed"]:                # 🟡 approaching forecast close
         n = _days_between(today, r["closed"])
         if n is not None and n <= soon_days:
-            flags.append(("yellow", f"fecha em {n}d"))
+            flags.append(("yellow", f"closing in {n}d"))
     sev = "red" if any(f[0] == "red" for f in flags) else ("yellow" if flags else "green")
     return {"health": _SEV_EMOJI[sev], "severity": sev, "flags": [f[1] for f in flags]}
 
@@ -300,7 +300,7 @@ def opps_detail(items, today):
     rows = []
     for p, r in items:
         rows.append({"projectId": p, "name": r["name"],
-                     "stage": r["stage"] or "(sem stage)", "owner": r["owner"],
+                     "stage": r["stage"] or "(no stage)", "owner": r["owner"],
                      "acv": acvn(r["acv"]), "closed_forecast": r["closed"],
                      "status": r["status"], **opp_health(r, today)})
     rows.sort(key=lambda x: (_SEV_ORDER[x["severity"]], -(x["acv"] or 0)))
@@ -366,7 +366,7 @@ def scorecard(items, as_of=None):
         closed = [(p, r) for p, r in subset if r["stage"] in ("Won", "Lost")]
         miss_close = sum(1 for _, r in closed if not r["closed"])
         miss_acv = sum(1 for _, r in subset if r["stage"] and acvn(r["acv"]) is None)
-        miss_region = sum(1 for _, r in subset if r["macro"] == "(sem região)")
+        miss_region = sum(1 for _, r in subset if r["macro"] == "(no region)")
         return {"total": n, "pct_staged": round(staged / n, 3),
                 "pct_salesforce_owned": round(sf / n, 3),
                 "pct_closed_missing_date": round(miss_close / len(closed), 3) if closed else None,
