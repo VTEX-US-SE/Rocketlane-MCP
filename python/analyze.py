@@ -50,6 +50,9 @@ def project_row(p: dict) -> dict:
     owner = p.get("owner") or {}
     owner_name = (f"{owner.get('firstName', '')} {owner.get('lastName', '')}".strip()
                   or owner.get("emailId") or "(sem owner)")
+    creator = p.get("createdBy") or {}
+    creator_name = (f"{creator.get('firstName', '')} {creator.get('lastName', '')}".strip()
+                    or creator.get("emailId") or "")
     return {
         "name": p.get("projectName", "?"),
         "archived": bool(p.get("archived")),
@@ -66,6 +69,7 @@ def project_row(p: dict) -> dict:
         "status": (p.get("status") or {}).get("label", ""),
         "owner": owner_name,
         "owner_email": owner.get("emailId", ""),
+        "created_by": creator_name,
         "gmv": fl.get("Estimated GMV"),
         "team_emails": [m.get("emailId") for m in ((p.get("teamMembers") or {}).get("members") or [])
                         if m.get("emailId")],
@@ -78,8 +82,20 @@ def rows_from_projects(projects: list[dict]) -> dict[str, dict]:
     return {str(p["projectId"]): project_row(p) for p in projects}
 
 
+def _is_dead_sync_artifact(r: dict) -> bool:
+    """Validated 2026-07-14: a Rocketlane record auto-created by the Salesforce sync that was
+    never staged (batch-created, no ACV, never worked by a human) — as opposed to a real SE
+    opportunity that just hasn't been staged yet (which the SE themselves created — see
+    'created_by'). Safe to exclude: since Won/Lost require a stage, this can NEVER remove a
+    Won/Lost outcome; all known instances have ACV 0/None, so it can't drop $ either. Zero
+    impact on any single-region digest — the excluded records are exactly the ones with no
+    region set."""
+    return r["created_by"] == "Salesforce" and not r["stage"]
+
+
 def scope_se(rows: dict[str, dict]) -> list[tuple[str, dict]]:
-    return [(pid, r) for pid, r in rows.items() if r["tpl"] in SE_TEMPLATE_IDS]
+    return [(pid, r) for pid, r in rows.items()
+            if r["tpl"] in SE_TEMPLATE_IDS and not _is_dead_sync_artifact(r)]
 
 
 def norm_sfid(raw: str) -> str:
