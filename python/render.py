@@ -36,19 +36,34 @@ VTEX_LOGO_SVG = (
 
 
 def _canonical(obj) -> str:
-    """Deterministic JSON: sorted keys, compact, ASCII-only (non-ASCII -> \\uXXXX)."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    """Deterministic JSON: sorted keys, compact, real UTF-8 (not ASCII \\uXXXX-escaped).
+
+    ensure_ascii=False on purpose (fixed 2026-07-15): when an LLM has to paste this
+    string verbatim into an artifact (Desktop model, or any manual re-transcription),
+    it reliably "auto-corrects" \\u00fc back to the literal ü — a 6-char escape sequence
+    is much easier to silently normalize than a single real character. That flipped the
+    checksum on every real digest with an accented name (Müller, Bürklin, ...) even
+    though the underlying data was byte-for-byte semantically identical — a false
+    positive on the integrity check, not real corruption. Real unicode chars are what
+    LLMs reproduce most faithfully, so keep them as-is.
+    """
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _harden(s: str) -> str:
-    """Make the JSON safe to embed inside <script>: escape < > & (valid JSON escapes,
-    only ever inside string values). Keeps the string pure-ASCII."""
-    return s.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+    """Make the JSON safe to embed inside <script>: escape only `<` (as \\u003c) so a
+    literal "</script" sequence in the data can never close the tag early. That's the
+    one byte sequence that's structurally unsafe here; `&` and `>` need no escaping
+    inside script-tag text content (HTML doesn't parse entities there), and each extra
+    escape is one more thing a transcribing LLM could silently "fix" back to the literal
+    character, breaking the checksum without changing the data (see _canonical above)."""
+    return s.replace("<", "\\u003c")
 
 
 def _fnv1a_hex(s: str) -> str:
     """FNV-1a 32-bit over UTF-8 bytes -> 8-char hex. MUST match the template's JS impl
-    (TextEncoder + Math.imul). `s` is ASCII here, so utf-8 == ascii."""
+    (TextEncoder + Math.imul). `s` may now contain real UTF-8 multi-byte chars, encoded
+    to bytes here the same way TextEncoder does in the browser."""
     h = 0x811C9DC5
     for b in s.encode("utf-8"):
         h ^= b
