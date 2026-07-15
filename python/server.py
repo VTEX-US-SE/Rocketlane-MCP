@@ -561,8 +561,10 @@ def get_region_digest(macro_region: str) -> dict[str, Any]:
 def get_se_digest(email: str) -> dict[str, Any]:
     """
     Individual SE digest (Template SE), server-side: data-hygiene nudges (my opps missing
-    stage / close date / ACV) + my open pipeline by stage. Matches on owner email OR team
-    membership. email e.g. "felipe.dias@vtex.com".
+    stage / close date / ACV), my open pipeline by stage, and this SE's own week-over-week
+    movement (won/lost/advanced since the last weekly snapshot — "insufficient_history" until
+    a baseline ~7 days old exists). Matches on owner email OR team membership.
+    email e.g. "felipe.dias@vtex.com".
     """
     if _analyze is None:
         return {"error": "analyze module unavailable next to server.py"}
@@ -571,7 +573,10 @@ def get_se_digest(email: str) -> dict[str, Any]:
         return pulled
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
-    return _digest_prov(_analyze.se_digest(_se_items(pulled), email, today), pulled)
+    bl = _weekly_baseline()
+    out = _analyze.se_digest(_se_items(pulled), email, today,
+                             prev_items=(bl["items"] if bl else None))
+    return _digest_prov(_with_since(out, bl), pulled)
 
 
 # ---------------------------------------------------------------------------

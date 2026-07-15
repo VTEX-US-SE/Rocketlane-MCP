@@ -463,7 +463,7 @@ def top_opps(items, today, n=5):
     return {"summary": summary, "top": top}
 
 
-def se_digest(items, email, today):
+def se_digest(items, email, today, prev_items=None):
     mine = _my_items(items, email)
     total = len(mine)
     nudges = {
@@ -471,11 +471,15 @@ def se_digest(items, email, today):
         "no_close_date": [{"projectId": p, "name": r["name"]} for p, r in mine if r["stage"] in ("Won", "Lost") and not r["closed"]],
         "no_acv": [{"projectId": p, "name": r["name"]} for p, r in mine if r["stage"] and acvn(r["acv"]) is None],
     }
+    # Scope the week-over-week diff to just this SE's opps (same baseline snapshot exec/region
+    # already read via _weekly_baseline() — filter it to `email` here rather than a fresh pull).
+    mine_prev = _my_items(prev_items, email) if prev_items is not None else None
     return {"se": email, "my_opps": total,
             "hygiene_nudges": {k: {"count": len(v), "opps": v} for k, v in nudges.items()},
             "my_pipeline": pipeline(mine, today),
             "at_risk_overdue": overdue(mine, today),
             "my_opps_detail": opps_detail(mine, today),
+            "movement": _movement(mine, mine_prev, today),
             "_coverage": covered("my opps", total, total, today)}
 
 
