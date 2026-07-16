@@ -119,6 +119,55 @@ def _resolve_api_key() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Slack bot identity (for post_slack_dm) — separate credential, same store
+# ---------------------------------------------------------------------------
+
+
+def _resolve_slack_token() -> str:
+    """Slack bot token for the team's app identity ("SE Co-Pilot Agent") — env
+    SLACK_BOT_TOKEN first, else the same credentials.json files used for the Rocketlane
+    key. Never logged. '' if unset (the tool call surfaces that, not a raise, since Slack
+    DMs are optional on top of the core Rocketlane tools)."""
+    env_tok = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    if env_tok:
+        return env_tok
+    for path in _candidate_credential_paths():
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not content or not content.startswith("{"):
+            continue
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        for key, value in data.items():
+            if str(key).lower().replace("_", "-") in {"slack-bot-token", "slack-token", "slack-bot"}:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return ""
+
+
+def _slack_lookup_user(email: str, token: str) -> dict[str, Any]:
+    """Resolve a Slack user id from an email (needs the users:read.email scope)."""
+    url = "https://slack.com/api/users.lookupByEmail?email=" + urllib.parse.quote(email)
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        if body.get("ok"):
+            return {"user_id": body["user"]["id"]}
+        return {"error": True, "message": "lookup: " + body.get("error", "?")}
+    except (urllib.error.URLError, KeyError, ValueError) as e:
+        return {"error": True, "message": f"lookup failure: {e}"}
+
+
+# ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
 
@@ -666,6 +715,42 @@ def render_presentation(view: str, region: str | None = None, se: str | None = N
     return {"view": view, "key": key, "html": html, "url": _load_urls().get(key),
             "instructions": "Create/redeploy an artifact whose ENTIRE content is `html`, "
                             "verbatim. Then call set_artifact_url(view, url[, region])."}
+
+
+@mcp.tool()
+def post_slack_dm(recipient: str, text: str) -> dict[str, Any]:
+    """
+    DM a person in Slack via the team's bot identity ("SE Co-Pilot Agent"), not as the
+    connected Claude account. `recipient` is a Slack user id (U...) or an email (resolved
+    via users.lookupByEmail). Requires SLACK_BOT_TOKEN (env or credentials.json) — never
+    logs the token.
+
+    Use this for scheduled/unattended digests (e.g. a Cowork schedule DMing an SE their own
+    get_se_digest) where the message should read as coming from the shared bot, not from
+    whoever's Claude account happens to be running the schedule. For interactive chat, the
+    standard Slack connector (posts as the user) is usually the right choice instead — this
+    tool is specifically for the bot-identity case.
+    """
+    token = _resolve_slack_token()
+    if not token:
+        return {"error": True, "message": "SLACK_BOT_TOKEN not found (env or credentials.json)"}
+    uid = recipient
+    if "@" in recipient:
+        r = _slack_lookup_user(recipient, token)
+        if r.get("error"):
+            return r
+        uid = r["user_id"]
+    data = json.dumps({"channel": uid, "text": text}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage", data=data, method="POST",
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + token},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return {"ok": bool(body.get("ok")), "error": None if body.get("ok") else body.get("error")}
+    except urllib.error.URLError as e:
+        return {"error": True, "message": f"network failure: {e}"}
 
 
 # ---------------------------------------------------------------------------
