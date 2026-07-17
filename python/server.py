@@ -20,16 +20,25 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
+import certifi
 from mcp.server.fastmcp import FastMCP
 
 BASE_URL = "https://api.rocketlane.com/api/1.0"
 TIMEOUT_S = 30
+
+# Explicit CA bundle for urllib requests. Needed because some Python installs
+# (notably python.org's macOS framework build, when "Install Certificates.command"
+# was never run) ship without a working system cert.pem — urllib then fails every
+# HTTPS call with CERTIFICATE_VERIFY_FAILED even though certifi (an mcp/httpx
+# dependency) is installed and has a valid bundle right there.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 # ---------------------------------------------------------------------------
 # Credential resolution
@@ -158,7 +167,7 @@ def _slack_lookup_user(email: str, token: str) -> dict[str, Any]:
     url = "https://slack.com/api/users.lookupByEmail?email=" + urllib.parse.quote(email)
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         if body.get("ok"):
             return {"user_id": body["user"]["id"]}
@@ -212,7 +221,7 @@ def _call(
 
     req = urllib.request.Request(url, data=data, method=method.upper(), headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             status = resp.status
     except urllib.error.HTTPError as e:
@@ -746,7 +755,7 @@ def post_slack_dm(recipient: str, text: str) -> dict[str, Any]:
         headers={"Content-Type": "application/json", "Authorization": "Bearer " + token},
     )
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         return {"ok": bool(body.get("ok")), "error": None if body.get("ok") else body.get("error")}
     except urllib.error.URLError as e:
