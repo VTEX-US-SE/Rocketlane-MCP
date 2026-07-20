@@ -91,8 +91,9 @@ def _is_dead_sync_artifact(r: dict) -> bool:
     never staged (batch-created, no ACV, never worked by a human) — as opposed to a real SE
     opportunity that just hasn't been staged yet (which the SE themselves created — see
     'created_by'). Safe to exclude: since Won/Lost require a stage, this can NEVER remove a
-    Won/Lost outcome; all 94 known instances have ACV 0/None, so it can't drop $ either.
-    Zero impact on any per-region digest (all instances fall in the '(no region)' bucket)."""
+    Won/Lost outcome; all known instances have ACV 0/None, so it can't drop $ either. Zero
+    impact on any single-region digest — the excluded records are exactly the ones with no
+    region set."""
     return r["created_by"] == "Salesforce" and not r["stage"]
 
 
