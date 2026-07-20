@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SE Governance</title>
+<style>
+  :root{
+    --ink:#0A1424; --ink-2:#0C182B; --pink:#F71963; --paper:#EEF2F8; --mist:#8C99AF;
+    --hairline:rgba(255,255,255,.09); --hairline-strong:rgba(255,255,255,.16);
+    --track:#16233c; --green:#3ED598; --amber:#F6B93B; --red:#FF5A5F;
+    --spine:clamp(2.25rem,7vw,7.5rem); --spine-line:1.6rem;
+    --sans:"Helvetica Neue","Helvetica Now Display",Helvetica,"Arial Nova",Arial,sans-serif;
+    --ui:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+    --voice:Georgia,"Times New Roman",Times,serif;
+    --cover-bg:radial-gradient(58% 52% at 74% 30%, rgba(247,25,99,.40), rgba(247,25,99,.09) 46%, transparent 72%),
+               radial-gradient(70% 70% at 8% 112%, rgba(247,25,99,.12), transparent 55%),
+               linear-gradient(158deg,#13223d 0%,#0b1526 46%,#09111f 100%);
+    --data-bg:var(--ink);
+    --close-bg:radial-gradient(46% 40% at 50% 118%, rgba(247,25,99,.16), transparent 70%), var(--ink);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--ink);color:var(--paper);font-family:var(--ui);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  .deck{height:100vh;overflow-y:scroll;scroll-snap-type:y mandatory;scroll-behavior:smooth}
+  .slide{min-height:100vh;scroll-snap-align:start;position:relative;display:flex;flex-direction:column;justify-content:center;
+         padding:clamp(4.5rem,11vh,7rem) var(--spine) clamp(2.2rem,6vh,3.5rem) calc(var(--spine) + var(--spine-line));overflow:hidden}
+  .slide.cover{background:var(--cover-bg)} .slide.data{background:var(--data-bg)} .slide.close{background:var(--close-bg)}
+  .inner{width:100%;max-width:64rem;opacity:0;transform:translateY(18px);transition:opacity .6s cubic-bezier(.2,.7,.2,1),transform .6s cubic-bezier(.2,.7,.2,1)}
+  .slide.in .inner{opacity:1;transform:none}
+  /* fixed chrome */
+  .meridian{position:fixed;top:0;left:var(--spine);width:2px;height:100%;z-index:2;
+    background:linear-gradient(180deg,rgba(247,25,99,0) 0%,rgba(247,25,99,.85) 12%,rgba(247,25,99,.85) 88%,rgba(247,25,99,0) 100%)}
+  .brandmark{position:fixed;top:clamp(1.6rem,4.5vh,2.6rem);left:calc(var(--spine) + 1.6rem);height:28px;z-index:6}
+  .vtex-mark{display:block;height:100%;width:auto}
+  .vtex-mark .glyph{fill:var(--pink)} .vtex-mark .word{fill:var(--paper)}
+  .progress{position:fixed;top:0;left:0;height:2px;background:var(--pink);width:0;z-index:7;transition:width .3s ease}
+  .counter{position:fixed;right:clamp(1.6rem,2.6vw,2.6rem);bottom:1.5rem;z-index:6;color:var(--mist);
+    font-family:var(--sans);font-size:.8rem;letter-spacing:.14em;font-variant-numeric:tabular-nums}
+  .hint{position:fixed;left:50%;bottom:1.4rem;transform:translateX(-50%);color:var(--mist);font-size:.78rem;
+    letter-spacing:.14em;text-transform:uppercase;z-index:6;transition:opacity .6s}
+  /* type */
+  .kicker{font-family:var(--sans);font-size:.78rem;font-weight:700;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--mist);display:flex;align-items:center;gap:.7rem;margin:0 0 1.8rem}
+  .kicker::before{content:"";width:1.6rem;height:2px;background:var(--pink);display:inline-block}
+  .cover-title{font-family:var(--sans);font-weight:700;font-size:clamp(3rem,7.6vw,6.75rem);line-height:.98;letter-spacing:-.03em;margin:0;text-wrap:balance}
+  .cover-title .ac{color:var(--pink)}
+  .subtitle{font-family:var(--voice);font-style:italic;font-size:clamp(1.15rem,2vw,1.6rem);line-height:1.35;color:#C6D0DF;max-width:34rem;margin:1.6rem 0 0}
+  .credit{display:flex;align-items:baseline;gap:.7rem;margin-top:3rem;font-size:.95rem}
+  .credit .lab{font-family:var(--sans);font-size:.72rem;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--mist)}
+  .credit b{font-weight:600;color:var(--paper)}
+  .slide-title{font-family:var(--sans);font-weight:700;font-size:clamp(2rem,4vw,3.4rem);line-height:1.04;letter-spacing:-.025em;margin:0;text-wrap:balance}
+  .hero-num{font-family:var(--sans);font-weight:700;font-size:clamp(4rem,10vw,7.5rem);line-height:.92;letter-spacing:-.03em;margin:.4rem 0 0}
+  .hero-num.pink{color:var(--pink)}
+  .hero-label{color:var(--mist);text-transform:uppercase;letter-spacing:.1em;font-size:.9rem;margin-top:1rem}
+  .caveat{color:var(--mist);font-family:var(--ui);font-size:.82rem;margin-top:1.8rem;max-width:42rem;line-height:1.55}
+  .chip{display:inline-block;font-size:.7rem;color:var(--mist);border:1px solid var(--hairline-strong);border-radius:20px;padding:2px 11px;margin-left:.7rem;vertical-align:middle}
+  .chip.warn{color:var(--ink);background:var(--amber);border-color:var(--amber);font-weight:700}
+  /* agenda */
+  .agenda{list-style:none;padding:0;margin:1.6rem 0 0}
+  .agenda li{display:flex;gap:1.4rem;align-items:baseline;padding:.95rem 0;border-bottom:1px solid var(--hairline);
+    font-family:var(--sans);font-size:clamp(1.15rem,2vw,1.6rem);font-weight:600;letter-spacing:-.01em}
+  .agenda .n{color:var(--pink);font-weight:700;font-variant-numeric:tabular-nums;min-width:2.6rem}
+  /* bars */
+  .viz{margin-top:1.9rem;max-width:52rem}
+  .row{display:flex;align-items:center;gap:1rem;margin:.7rem 0}
+  .row .lab{width:12rem;flex:none;font-size:.9rem;color:var(--paper)}
+  .row .track{flex:1;height:14px;background:var(--track);border-radius:4px;position:relative;overflow:hidden}
+  .row .fill,.row .seg{position:absolute;top:0;bottom:0;background:var(--pink);border-radius:4px}
+  .row .tick{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--paper);opacity:.5}
+  .row .val{width:12rem;flex:none;text-align:right;font-size:.88rem;color:var(--mist);font-variant-numeric:tabular-nums}
+  .row .val b{color:var(--paper)}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:.95rem;margin-top:1.4rem;max-width:60rem}
+  th,td{text-align:left;padding:.7rem .75rem;border-bottom:1px solid var(--hairline)}
+  th{color:var(--mist);font-weight:500;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px}
+  .dot.red{background:var(--red)} .dot.yellow{background:var(--amber)} .dot.green{background:var(--green)}
+  .flag{display:inline-block;font-size:.7rem;color:var(--mist);background:var(--track);border-radius:6px;padding:1px 8px;margin:0 5px 5px 0}
+  /* SE×stage matrix */
+  table.matrix{font-size:.82rem;max-width:64rem}
+  table.matrix td,table.matrix th{padding:.5rem .6rem}
+  table.matrix td.num{color:var(--mist)} table.matrix td.tot,table.matrix th.num{color:var(--paper)}
+  table.matrix td.nostage{color:var(--amber)}
+  /* status strip + pills */
+  .status-strip{display:flex;gap:1.6rem;margin:.2rem 0 1.2rem}
+  .pill{font-family:var(--sans);font-weight:700;font-size:1.15rem;display:inline-flex;align-items:center;gap:.45rem}
+  /* highlights / lowlights */
+  .move-cols{display:flex;gap:3rem;margin-top:1rem;flex-wrap:wrap}
+  .move-col{flex:1;min-width:17rem}
+  .move-h{font-family:var(--sans);font-weight:700;letter-spacing:.01em;font-size:1.15rem;margin-bottom:.9rem}
+  .move-h.up{color:var(--green)} .move-h.down{color:var(--red)}
+  .move-item{padding:.6rem 0;border-bottom:1px solid var(--hairline);font-size:1.08rem}
+  .move-item.muted{color:var(--mist)}
+  /* takeaways / closing */
+  .take{list-style:none;padding:0;margin:1.4rem 0 0;max-width:52rem}
+  .take li{display:flex;gap:.9rem;padding:.75rem 0;font-size:clamp(1rem,1.9vw,1.25rem);border-bottom:1px solid var(--hairline)}
+  .take .k{color:var(--pink);font-weight:800}
+  .checklist{list-style:none;padding:0;margin:1rem 0 0;max-width:52rem}
+  .checklist li{padding:.6rem 0;font-size:.98rem;border-bottom:1px solid var(--hairline)}
+  .foot{color:var(--mist);font-size:.72rem;margin-top:2rem;line-height:1.9;font-family:var(--ui)}
+  /* SE brief */
+  .brief{min-height:100vh;background:var(--data-bg);
+    padding:clamp(3.5rem,9vh,5rem) var(--spine) 3rem calc(var(--spine) + var(--spine-line))}
+  .brief .inner{opacity:1;transform:none;max-width:66rem}
+  .brief h1{font-family:var(--sans);font-size:clamp(2rem,3.4vw,2.9rem);font-weight:700;letter-spacing:-.025em;margin:0}
+  .risk-banner{background:rgba(255,90,95,.12);border:1px solid rgba(255,90,95,.4);border-radius:12px;padding:.9rem 1.1rem;margin:1.4rem 0;color:#FFB3B5;font-size:.95rem}
+  .cards{display:flex;gap:.9rem;flex-wrap:wrap;margin-top:1.2rem}
+  .card{background:var(--ink-2);border:1px solid var(--hairline);border-radius:12px;padding:1rem 1.1rem;flex:1;min-width:13rem}
+  .card .t{color:var(--mist);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em}
+  .card .v{font-family:var(--sans);font-size:1.4rem;font-weight:700;margin-top:.4rem}
+  #err{display:none;position:fixed;inset:0;background:#2A0A0E;color:#fff;z-index:9999;padding:5rem var(--spine);font-family:var(--ui)}
+  #err h1{color:var(--red);font-size:1.8rem;margin-bottom:1rem;font-family:var(--sans)}
+  @media(prefers-reduced-motion:reduce){.inner{transition:none;opacity:1;transform:none}}
+</style>
+</head>
+<body>
+  <div id="err"><h1>⚠️ DATA INTEGRITY CHECK FAILED</h1>
+    <p>This report was corrupted during generation. <b>Do not use these numbers.</b> Regenerate the artifact (ask the copilot again).</p></div>
+  <div class="meridian"></div>
+  <div class="brandmark">__VTEX_LOGO__</div>
+  <div class="progress" id="prog"></div>
+  <div class="counter" id="counter"></div>
+
+  <script type="application/json" id="data"
+          data-checksum="__CHECKSUM__" data-template-version="__TEMPLATE_VERSION__" data-view="__VIEW__">__DATA__</script>
+
+  <script>
+  (function(){
+    "use strict";
+    function fnv1a(str){var b=new TextEncoder().encode(str);var h=0x811c9dc5;
+      for(var i=0;i<b.length;i++){h^=b[i];h=Math.imul(h,0x01000193)>>>0;}return ("0000000"+h.toString(16)).slice(-8);}
+    var node=document.getElementById("data"), raw=node.textContent, P;
+    if(fnv1a(raw)!==node.getAttribute("data-checksum")){document.getElementById("err").style.display="block";return;}
+    try{P=JSON.parse(raw);}catch(e){document.getElementById("err").style.display="block";return;}
+
+    function e(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n;}
+    function usd(n){if(n==null||isNaN(n))return "—";var a=Math.abs(n);
+      if(a>=1e6)return "$"+(n/1e6).toFixed(2).replace(/\.?0+$/,"")+"M";
+      if(a>=1e3)return "$"+Math.round(n/1e3)+"K";return "$"+Math.round(n);}
+    function pct(x){return x==null?"—":Math.round(x*100)+"%";}
+    function covChip(c){if(!c)return null;var t=(c.n!=null?c.n:"?")+"/"+(c.of!=null?c.of:"?")+" · "+pct(c.coverage);
+      var ch=e("span","chip",t);if(c.coverage!=null&&c.coverage<0.7)ch.className="chip warn";return ch;}
+    function band(w){if(!w||(w.won+w.lost)===0)return null;return Math.round(w.strict*100)+"–"+Math.round(w.sensitivity*100)+"%";}
+    function latestHalf(tr){var ks=Object.keys(tr||{});for(var i=0;i<ks.length;i++){var w=tr[ks[i]];if(w&&(w.won+w.lost)>0)return{label:ks[i],w:w};}return ks.length?{label:ks[0],w:tr[ks[0]]}:null;}
+
+    function funnelRows(items,maxV){var v=e("div","viz");items.forEach(function(x){var r=e("div","row");r.appendChild(e("div","lab",x.lab));
+      var tr=e("div","track");var f=e("div","fill");f.style.left="0";f.style.width=Math.max(2,Math.round((x.val/(maxV||1))*100))+"%";tr.appendChild(f);r.appendChild(tr);
+      var val=e("div","val");val.innerHTML=x.valTxt;r.appendChild(val);v.appendChild(r);});return v;}
+    function bandRows(trend){var v=e("div","viz");Object.keys(trend).forEach(function(k){var w=trend[k];var r=e("div","row");r.appendChild(e("div","lab",k));
+      var tr=e("div","track");if((w.won+w.lost)>0){var seg=e("div","seg");var s=w.strict*100,en=w.sensitivity*100;seg.style.left=s+"%";seg.style.width=Math.max(3,en-s)+"%";tr.appendChild(seg);}r.appendChild(tr);
+      var val=e("div","val");val.innerHTML=(w.won+w.lost)>0?("<b>"+band(w)+"</b> · "+w.won+"W/"+w.lost+"L"):"n<5 — not reported";r.appendChild(val);v.appendChild(r);});return v;}
+    function meterRows(items){var v=e("div","viz");items.forEach(function(x){var r=e("div","row");r.appendChild(e("div","lab",x.lab));
+      var tr=e("div","track");var f=e("div","fill");f.style.left="0";f.style.width=Math.max(2,Math.round((x.frac||0)*100))+"%";f.style.background=(x.frac!=null&&x.frac<0.7)?"var(--amber)":"var(--green)";tr.appendChild(f);
+      if(x.tick!=null){var tk=e("div","tick");tk.style.left=(x.tick*100)+"%";tr.appendChild(tk);}r.appendChild(tr);var val=e("div","val",x.txt);r.appendChild(val);v.appendChild(r);});return v;}
+
+    function moveSentence(ev){var a=ev.acv?(" ("+usd(ev.acv)+")"):"";
+      if(ev.kind==="won")return ev.opp+" closed Won"+a;
+      if(ev.kind==="advance")return ev.opp+" advanced "+ev.from+" → "+ev.to+a;
+      if(ev.kind==="new")return "New opportunity "+ev.opp+a;
+      if(ev.kind==="lost")return ev.opp+" marked Lost"+a;
+      if(ev.kind==="slipped")return ev.opp+" slipped past its close date"+a;
+      if(ev.kind==="regress")return ev.opp+" slipped "+ev.from+" → "+ev.to+a;
+      return ev.opp;}
+    function matrixTable(m){var t=e("table","matrix");var hr=e("tr");hr.appendChild(e("th",null,"SE"));
+      (m.columns||[]).forEach(function(c){hr.appendChild(e("th","num",c==="(no stage)"?"No stage":c));});hr.appendChild(e("th","num","Total"));t.appendChild(hr);
+      (m.rows||[]).forEach(function(r){var tr=e("tr");tr.appendChild(e("td",null,r.owner));
+        (m.columns||[]).forEach(function(c){var v=r.counts[c]||0;tr.appendChild(e("td","num"+(c==="(no stage)"&&v?" nostage":""),v||"·"));});
+        tr.appendChild(e("td","num tot",r.total));t.appendChild(tr);});return t;}
+    function pill(sev,n){var p=e("span","pill "+sev);p.appendChild(e("span","dot "+sev));p.appendChild(document.createTextNode(" "+n));return p;}
+    function top5Block(to){var w=e("div");var sm=e("div","status-strip");
+      sm.appendChild(pill("red",(to.summary&&to.summary.red)||0));sm.appendChild(pill("yellow",(to.summary&&to.summary.yellow)||0));sm.appendChild(pill("green",(to.summary&&to.summary.green)||0));w.appendChild(sm);
+      var t=e("table");var hr=e("tr");["","Opportunity","Stage","Owner","ACV"].forEach(function(c,ix){hr.appendChild(e("th",ix===4?"num":null,c));});t.appendChild(hr);
+      (to.top||[]).forEach(function(o){var r=e("tr");var td0=e("td");td0.appendChild(e("span","dot "+(o.severity||"green")));r.appendChild(td0);
+        r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.stage||"—"));r.appendChild(e("td",null,o.owner||"—"));r.appendChild(e("td","num",usd(o.acv)));t.appendChild(r);});w.appendChild(t);return w;}
+    function movementBlock(mv){var w=e("div");
+      if(!mv||mv.status!=="ok"){w.appendChild(e("div","caveat","Highlights & lowlights start once a week of history has accrued (a prior snapshot is needed)."));return w;}
+      var cols=e("div","move-cols");
+      var hi=e("div","move-col");hi.appendChild(e("div","move-h up","▲ Highlights"));
+      if((mv.highlights||[]).length)mv.highlights.forEach(function(ev){hi.appendChild(e("div","move-item",moveSentence(ev)));});
+      else hi.appendChild(e("div","move-item muted","No notable wins this week"));
+      var lo=e("div","move-col");lo.appendChild(e("div","move-h down","▼ Lowlights"));
+      if((mv.lowlights||[]).length)mv.lowlights.forEach(function(ev){lo.appendChild(e("div","move-item",moveSentence(ev)));});
+      else lo.appendChild(e("div","move-item muted","No notable setbacks this week"));
+      cols.appendChild(hi);cols.appendChild(lo);w.appendChild(cols);return w;}
+    function inner(){return e("div","inner");}
+    function slide(cls,node){var s=e("section","slide "+cls);s.appendChild(node);return s;}
+    function kicker(t){return e("p","kicker",t);}
+    function cover(cfg){var i=inner();i.appendChild(kicker(cfg.kicker));
+      var h=e("h1","cover-title");cfg.parts.forEach(function(p){h.appendChild(e("span",p.ac?"ac":null,p.t));});i.appendChild(h);
+      if(cfg.subtitle)i.appendChild(e("p","subtitle",cfg.subtitle));
+      if(cfg.credit){var c=e("div","credit");c.appendChild(e("span","lab","Prepared"));var b=e("b",null,cfg.credit.name);c.appendChild(b);c.appendChild(e("span",null,cfg.credit.role));i.appendChild(c);}
+      return slide("cover",i);}
+    function agenda(items){var i=inner();i.appendChild(kicker("Agenda"));var ol=e("ul","agenda");
+      items.forEach(function(t,ix){var li=e("li");li.appendChild(e("span","n",("0"+(ix+1)).slice(-2)));li.appendChild(e("span",null,t));ol.appendChild(li);});i.appendChild(ol);return slide("data",i);}
+    function numSlide(cfg){var i=inner();if(cfg.kicker)i.appendChild(kicker(cfg.kicker));if(cfg.title)i.appendChild(e("h2","slide-title",cfg.title));
+      if(cfg.hero!=null){i.appendChild(e("div","hero-num"+(cfg.pink?" pink":""),cfg.hero));if(cfg.heroLabel){var hl=e("div","hero-label");hl.textContent=cfg.heroLabel;if(cfg.chip)hl.appendChild(cfg.chip);i.appendChild(hl);}}
+      if(cfg.viz)i.appendChild(cfg.viz);if(cfg.node)i.appendChild(cfg.node);if(cfg.caveat)i.appendChild(e("div","caveat",cfg.caveat));return slide("data",i);}
+    function closing(cfg){var i=inner();i.appendChild(kicker(cfg.kicker||"Read & next steps"));i.appendChild(e("h2","slide-title",cfg.title||"Where we stand"));
+      var ul=e("ul","take");(cfg.takeaways||[]).forEach(function(t){var li=e("li");li.appendChild(e("span","k","→"));li.appendChild(e("span",null,t));ul.appendChild(li);});i.appendChild(ul);
+      if(cfg.next&&cfg.next.length){i.appendChild(e("div","hero-label","Next steps"));var cl=e("ul","checklist");cfg.next.forEach(function(t){cl.appendChild(e("li","","☐ "+t));});i.appendChild(cl);}
+      if(cfg.footHTML){var f=e("div","foot");f.innerHTML=cfg.footHTML;i.appendChild(f);}return slide("close",i);}
+    function provFoot(prov,P){return "Source: "+(prov.source||"Rocketlane (api-key)")+" · universe "+(prov.universe!=null?prov.universe:"?")+
+      " · Template SE (520608)<br>as_of "+(prov.as_of||"?")+" · template "+(P.template_version||"?")+" · generated "+(P.generated_ts||"?")+" · ✓ integrity verified (checksum)";}
+
+    // ============ EXEC ============
+    function execSlides(P){var d=P.digest,prov=P.prov||{},S=[];
+      var sc=(d.data_quality_scorecard&&d.data_quality_scorecard.overall)||{};var lh=latestHalf(d.org_winrate_trend);
+      var prs=d.pipeline_region_stage||{};var totA=0,totC=0;Object.keys(prs).forEach(function(r){totA+=prs[r].open_acv||0;totC+=prs[r].open_count||0;});
+      S.push(cover({kicker:"SE Governance Review",parts:[{t:"Solution Engineering "},{t:"Governance",ac:true}],
+        subtitle:"Portfolio health, win-rate and data confidence · Template SE",
+        credit:{name:"Solution Engineering",role:"· as of "+String(prov.as_of||"").slice(0,10)}}));
+      S.push(agenda(["Open pipeline","Win-rate this half","Pipeline by region","Data confidence","Top losses","This week","Read & next steps"]));
+      S.push(numSlide({kicker:"Open pipeline",hero:usd(totA),pink:true,heroLabel:totC+" open opportunities · Template SE",
+        caveat:"ACV is the reliable measure. GMV omitted — outliers inflate open pipeline to ~$17bn."}));
+      if(lh)S.push(numSlide({kicker:"Win-rate · "+lh.label,hero:band(lh.w)||"—",heroLabel:lh.w.won+" won · "+lh.w.lost+" lost",
+        viz:bandRows(d.org_winrate_trend||{}),
+        caveat:"Band: strict counts only Won/Lost with a close date; sensitivity includes closed-without-date. Loss reason is 0% in Rocketlane — we cannot report \"why we lost\"."}));
+      var regs=Object.keys(prs).map(function(r){return{r:r,o:prs[r]};}).filter(function(x){return x.o.open_count;}).sort(function(a,b){return (b.o.open_acv||0)-(a.o.open_acv||0);});
+      var maxA=Math.max.apply(null,regs.map(function(x){return x.o.open_acv||0}).concat([1]));
+      S.push(numSlide({title:"Open pipeline by region",
+        viz:funnelRows(regs.map(function(x){return{lab:x.r,val:x.o.open_acv||0,valTxt:"<b>"+usd(x.o.open_acv)+"</b> · "+x.o.open_count+" · cov "+pct(x.o._coverage&&x.o._coverage.coverage)};}),maxA),
+        caveat:"Open ACV by region. Coverage = % of the region's opps with a classifiable stage."}));
+      S.push(numSlide({title:"Data confidence",
+        viz:meterRows([{lab:"Staged",frac:sc.pct_staged,txt:pct(sc.pct_staged),tick:0.9},
+          {lab:"Owner attributed",frac:1-(sc.pct_salesforce_owned||0),txt:pct(1-(sc.pct_salesforce_owned||0))},
+          {lab:"Region set",frac:1-(sc.pct_missing_region||0),txt:pct(1-(sc.pct_missing_region||0))}]),
+        caveat:"Base: "+(sc.total!=null?sc.total:"?")+" Template SE opps. The light tick is the target (90% staged). Fixing this lifts the confidence of every number above."}));
+      if(lh&&lh.w.top_lost&&lh.w.top_lost.length){var i=inner();i.appendChild(kicker("Top losses · "+lh.label));i.appendChild(e("h2","slide-title","Losses by ACV"));
+        var t=e("table");var hr=e("tr");["Opportunity","Region","Closed","ACV"].forEach(function(c,ix){hr.appendChild(e("th",ix===3?"num":null,c));});t.appendChild(hr);
+        lh.w.top_lost.slice(0,5).forEach(function(o){var r=e("tr");r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.macro||"—"));r.appendChild(e("td",null,o.closed||"—"));r.appendChild(e("td","num",usd(o.acv)));t.appendChild(r);});
+        i.appendChild(t);i.appendChild(e("div","caveat","No loss reason in Rocketlane — prioritize populating Closed Lost Reason from Salesforce."));S.push(slide("data",i));}
+      S.push(numSlide({title:"This week — highlights & lowlights",node:movementBlock(d.movement),
+        caveat:(d.movement&&d.movement.since?("Since "+String(d.movement.since).slice(0,10)+" · "):"")+"Org-wide, week-over-week from the snapshot diff."}));
+      var unstaged=Math.round((sc.total||0)*(1-(sc.pct_staged||0)));var sfown=Math.round((sc.total||0)*(sc.pct_salesforce_owned||0));
+      S.push(closing({takeaways:[(lh?("Win-rate "+lh.label+": "+band(lh.w)+" ("+lh.w.won+"W/"+lh.w.lost+"L)"):"Win-rate: —"),
+        usd(totA)+" in open pipeline ("+totC+" opps)",pct(sc.pct_staged)+" of opps have a stage — below the 90% target"],
+        next:["Raise stage coverage: ~"+unstaged+" opps unclassified","Reassign ~"+sfown+" opps owned by \"Salesforce\" to human SEs","Populate Closed Lost Reason (SF→RL) — 0% today — for loss analysis"],
+        footHTML:provFoot(prov,P)}));
+      return S;}
+
+    // ============ REGION ============
+    function regionSlides(P){var d=P.digest,prov=P.prov||{},S=[];var f=d.funnel||{};
+      S.push(cover({kicker:"Region Review",parts:[{t:(d.region||"Region"),ac:true}],
+        subtitle:"Regional pipeline and governance · Template SE",
+        credit:{name:"Solution Engineering",role:"· as of "+String(prov.as_of||"").slice(0,10)}}));
+      var ov=d.at_risk_overdue||{count:0};
+      S.push(agenda(["Open pipeline","Opps per SE by stage","Top 5 opportunities","This week — highlights & lowlights","Team hygiene","Read & next steps"]));
+      var bs=f.by_stage||{};var st=Object.keys(bs).map(function(k){return{k:k,c:bs[k]};}).sort(function(a,b){return (b.c.acv||0)-(a.c.acv||0);});
+      var maxA=Math.max.apply(null,st.map(function(x){return x.c.acv||0}).concat([1]));
+      S.push(numSlide({kicker:"Open pipeline",hero:usd(f.open_acv),pink:true,heroLabel:(f.open_count||0)+" open · "+(d.opps||0)+" total",chip:covChip(f._coverage),
+        viz:funnelRows(st.map(function(x){return{lab:x.k,val:x.c.acv||0,valTxt:"<b>"+usd(x.c.acv)+"</b> · "+x.c.count};}),maxA),
+        caveat:(d.no_stage?("⚠ "+d.no_stage+" opps with no stage. "):"")+"ACV shown; GMV omitted (outliers). Region win-rate reported only for Brazil & EMEA-APAC (others n<5)."}));
+      S.push(numSlide({title:"Opportunities per SE by stage",node:matrixTable(d.se_by_stage||{}),
+        caveat:"Volume by SE — not a performance ranking. “No stage” opps sit outside the funnel until classified."}));
+      S.push(numSlide({title:"Top opportunities by status",node:top5Block(d.top_opps||{}),
+        caveat:"Top 5 by ACV; colour = health (🔴 at risk / 🟡 watch / 🟢 healthy). The strip shows region totals per status."}));
+      S.push(numSlide({title:"This week — highlights & lowlights",node:movementBlock(d.movement),
+        caveat:(d.movement&&d.movement.since?("Since "+String(d.movement.since).slice(0,10)+" · "):"")+"Week-over-week from the snapshot diff."}));
+      var hy=d.hygiene_by_se||{};var ents=Object.keys(hy).sort().map(function(se){var h=hy[se];var c=h.completeness==null?0:h.completeness;return{lab:se+(c<0.7?" ⚠":""),frac:c,txt:pct(c)+" · "+h.total+" opps",tick:0.9};});
+      S.push(numSlide({title:"Team hygiene",viz:meterRows(ents),caveat:"Alphabetical — data completeness, not a performance ranking."}));
+      S.push(closing({takeaways:[usd(f.open_acv)+" in open pipeline ("+(f.open_count||0)+" opps)",ov.count+" opportunity(ies) with a past close date",(d.no_stage||0)+" opps with no stage in the region"],
+        next:["Rebaseline the "+ov.count+" overdue opps (date/stage)","Classify the "+(d.no_stage||0)+" opps with no stage","Align hygiene with SEs below 70%"],
+        footHTML:provFoot(prov,P)}));
+      return S;}
+
+    // ============ SE brief ============
+    function renderSE(P){var d=P.digest,prov=P.prov||{},mp=d.my_pipeline||{};
+      document.getElementById("prog").style.display="none";document.getElementById("counter").style.display="none";
+      var b=e("div","brief");var i=e("div","inner");i.appendChild(kicker("My book"));i.appendChild(e("h1",null,d.se||"SE"));
+      var ov=d.at_risk_overdue||{count:0};if(ov.count)i.appendChild(e("div","risk-banner","⚠ "+ov.count+" opportunity(ies) with a past close date, still open — see below."));
+      var cards=e("div","cards");[["My open ACV",usd(mp.open_acv)],["Open",(mp.open_count||0)+""],["Total",(d.my_opps||0)+""]].forEach(function(p){var c=e("div","card");c.appendChild(e("div","t",p[0]));c.appendChild(e("div","v",p[1]));cards.appendChild(c);});i.appendChild(cards);
+      var nud=d.hygiene_nudges||{};i.appendChild(e("div","hero-label","5 minutes to fix"));var cl=e("ul","checklist");
+      [["no_stage","No stage"],["no_close_date","No close date"],["no_acv","No ACV"]].forEach(function(p){var g=nud[p[0]]||{count:0,opps:[]};var li=e("li");li.textContent=(g.count?"🔧 ":"✅ ")+p[1]+": "+g.count+(g.count?"  ":"");(g.opps||[]).slice(0,6).forEach(function(o){li.appendChild(e("span","flag",o.name||("#"+o.projectId)));});cl.appendChild(li);});i.appendChild(cl);
+      i.appendChild(e("div","hero-label","My opportunities"));var t=e("table");var hr=e("tr");["","Opportunity","Stage","ACV","Close","Flags"].forEach(function(c,ix){hr.appendChild(e("th",ix===3?"num":null,c));});t.appendChild(hr);
+      (d.my_opps_detail||[]).forEach(function(o){var r=e("tr");var td0=e("td");td0.appendChild(e("span","dot "+(o.severity||"green")));r.appendChild(td0);r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.stage||"—"));r.appendChild(e("td","num",usd(o.acv)));r.appendChild(e("td",null,o.closed_forecast||"—"));var tf=e("td");(o.flags||[]).forEach(function(fl){tf.appendChild(e("span","flag",fl));});r.appendChild(tf);t.appendChild(r);});i.appendChild(t);
+      var ft=e("div","foot");ft.innerHTML=provFoot(prov,P);i.appendChild(ft);b.appendChild(i);document.body.appendChild(b);}
+
+    // ============ deck assembly + nav ============
+    function buildDeck(slides){var deck=e("div","deck");slides.forEach(function(s){deck.appendChild(s);});document.body.appendChild(deck);
+      var total=slides.length,cur=0;var counter=document.getElementById("counter"),prog=document.getElementById("prog");
+      function setCur(ix){cur=ix;counter.textContent=("0"+(ix+1)).slice(-2)+" / "+("0"+total).slice(-2);prog.style.width=((ix+1)/total*100)+"%";}
+      setCur(0);
+      var io=new IntersectionObserver(function(ents){ents.forEach(function(en){if(en.isIntersecting){en.target.classList.add("in");setCur(slides.indexOf(en.target));}});},{threshold:0.55});
+      slides.forEach(function(s){io.observe(s);});slides[0].classList.add("in");
+      function go(ix){ix=Math.max(0,Math.min(total-1,ix));slides[ix].scrollIntoView({behavior:"smooth"});}
+      document.addEventListener("keydown",function(ev){
+        if(["ArrowDown","PageDown"," ","ArrowRight"].indexOf(ev.key)>=0){ev.preventDefault();go(cur+1);}
+        else if(["ArrowUp","PageUp","ArrowLeft"].indexOf(ev.key)>=0){ev.preventDefault();go(cur-1);}
+        else if(ev.key==="Home"){ev.preventDefault();go(0);}else if(ev.key==="End"){ev.preventDefault();go(total-1);}
+        else if(ev.key==="f"||ev.key==="F"){if(!document.fullscreenElement){document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();}else{document.exitFullscreen&&document.exitFullscreen();}}});
+      var hint=e("div","hint","↓ or → to advance");document.body.appendChild(hint);setTimeout(function(){hint.style.opacity="0";},3800);}
+
+    if(P.view==="se"){renderSE(P);}
+    else if(P.view==="exec"){buildDeck(execSlides(P));}
+    else if(P.view==="region"){buildDeck(regionSlides(P));}
+    else{document.getElementById("err").style.display="block";}
+  })();
+  </script>
+</body>
+</html>

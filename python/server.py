@@ -20,16 +20,25 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
+import certifi
 from mcp.server.fastmcp import FastMCP
 
 BASE_URL = "https://api.rocketlane.com/api/1.0"
 TIMEOUT_S = 30
+
+# Explicit CA bundle for urllib requests. Needed because some Python installs
+# (notably python.org's macOS framework build, when "Install Certificates.command"
+# was never run) ship without a working system cert.pem — urllib then fails every
+# HTTPS call with CERTIFICATE_VERIFY_FAILED even though certifi (an mcp/httpx
+# dependency) is installed and has a valid bundle right there.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 # ---------------------------------------------------------------------------
 # Credential resolution
@@ -119,6 +128,55 @@ def _resolve_api_key() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Slack bot identity (for post_slack_dm) — separate credential, same store
+# ---------------------------------------------------------------------------
+
+
+def _resolve_slack_token() -> str:
+    """Slack bot token for the team's app identity ("SE Co-Pilot Agent") — env
+    SLACK_BOT_TOKEN first, else the same credentials.json files used for the Rocketlane
+    key. Never logged. '' if unset (the tool call surfaces that, not a raise, since Slack
+    DMs are optional on top of the core Rocketlane tools)."""
+    env_tok = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    if env_tok:
+        return env_tok
+    for path in _candidate_credential_paths():
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not content or not content.startswith("{"):
+            continue
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        for key, value in data.items():
+            if str(key).lower().replace("_", "-") in {"slack-bot-token", "slack-token", "slack-bot"}:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return ""
+
+
+def _slack_lookup_user(email: str, token: str) -> dict[str, Any]:
+    """Resolve a Slack user id from an email (needs the users:read.email scope)."""
+    url = "https://slack.com/api/users.lookupByEmail?email=" + urllib.parse.quote(email)
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        if body.get("ok"):
+            return {"user_id": body["user"]["id"]}
+        return {"error": True, "message": "lookup: " + body.get("error", "?")}
+    except (urllib.error.URLError, KeyError, ValueError) as e:
+        return {"error": True, "message": f"lookup failure: {e}"}
+
+
+# ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
 
@@ -163,7 +221,7 @@ def _call(
 
     req = urllib.request.Request(url, data=data, method=method.upper(), headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             status = resp.status
     except urllib.error.HTTPError as e:
@@ -419,6 +477,46 @@ def _se_items(pulled: dict) -> list:
     return _analyze.scope_se(_analyze.rows_from_projects(pulled["projects"]))
 
 
+def _weekly_baseline(target_days: int = 7, min_days: int = 4):
+    """Read the skill's snapshot cache (~/.cache/rocketlane) for a ~7-day-ago baseline, for
+    week-over-week highlight/lowlight. Returns {'items', 'as_of'} or None (insufficient history
+    = no snapshot at least `min_days` old). The MCP is stateless per call but co-located with
+    the deterministic pipeline's snapshot store, so it reads that store rather than keeping its own."""
+    if _analyze is None:
+        return None
+    import datetime as _dt
+    import glob as _glob
+    cache = Path.home() / ".cache" / "rocketlane"
+    now = _dt.datetime.now()
+    best = None
+    for path in sorted(_glob.glob(str(cache / "snapshot-*.json"))):
+        try:
+            snap = json.loads(Path(path).read_text())
+            as_of = (snap.get("as_of") or "")[:19]
+            if not as_of:
+                continue
+            age = (now - _dt.datetime.fromisoformat(as_of)).days
+            if age < min_days:
+                continue
+            score = abs(age - target_days)
+            if best is None or score < best[0]:
+                best = (score, snap)
+        except Exception:
+            continue
+    if best is None:
+        return None
+    snap = best[1]
+    return {"items": _analyze.scope_se(_analyze.rows_from_projects(snap["projects"])),
+            "as_of": snap.get("as_of")}
+
+
+def _with_since(out: dict, baseline) -> dict:
+    """Stamp the movement block's `since` with the baseline's as_of, when movement was computed."""
+    if baseline and isinstance(out.get("movement"), dict) and out["movement"].get("status") == "ok":
+        out["movement"]["since"] = baseline["as_of"]
+    return out
+
+
 @mcp.tool()
 def get_se_winrate(from_date: str | None = None, to_date: str | None = None) -> dict[str, Any]:
     """
@@ -490,7 +588,10 @@ def get_exec_digest(from_date: str | None = None, to_date: str | None = None) ->
         return pulled
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
-    return _digest_prov(_analyze.exec_digest(_se_items(pulled), today, from_date, to_date), pulled)
+    bl = _weekly_baseline()
+    out = _analyze.exec_digest(_se_items(pulled), today, from_date, to_date,
+                               prev_items=(bl["items"] if bl else None))
+    return _digest_prov(_with_since(out, bl), pulled)
 
 
 @mcp.tool()
@@ -508,15 +609,20 @@ def get_region_digest(macro_region: str) -> dict[str, Any]:
         return pulled
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
-    return _digest_prov(_analyze.region_digest(_se_items(pulled), macro_region, today), pulled)
+    bl = _weekly_baseline()
+    out = _analyze.region_digest(_se_items(pulled), macro_region, today,
+                                 prev_items=(bl["items"] if bl else None))
+    return _digest_prov(_with_since(out, bl), pulled)
 
 
 @mcp.tool()
 def get_se_digest(email: str) -> dict[str, Any]:
     """
     Individual SE digest (Template SE), server-side: data-hygiene nudges (my opps missing
-    stage / close date / ACV) + my open pipeline by stage. Matches on owner email OR team
-    membership. email e.g. "felipe.dias@vtex.com".
+    stage / close date / ACV), my open pipeline by stage, and this SE's own week-over-week
+    movement (won/lost/advanced since the last weekly snapshot — "insufficient_history" until
+    a baseline ~7 days old exists). Matches on owner email OR team membership.
+    email e.g. "felipe.dias@vtex.com".
     """
     if _analyze is None:
         return {"error": "analyze module unavailable next to server.py"}
@@ -525,7 +631,135 @@ def get_se_digest(email: str) -> dict[str, Any]:
         return pulled
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
-    return _digest_prov(_analyze.se_digest(_se_items(pulled), email, today), pulled)
+    bl = _weekly_baseline()
+    out = _analyze.se_digest(_se_items(pulled), email, today,
+                             prev_items=(bl["items"] if bl else None))
+    return _digest_prov(_with_since(out, bl), pulled)
+
+
+# ---------------------------------------------------------------------------
+# Presentation artifacts (render + URL registry)
+# ---------------------------------------------------------------------------
+
+try:
+    import render as _render  # noqa: E402
+except Exception:  # pragma: no cover
+    _render = None
+
+_URL_STORE = Path.home() / ".cache" / "rocketlane" / "artifact_urls.json"
+
+
+def _url_key(view: str, region: str | None) -> str:
+    return f"region:{region}" if view == "region" else view
+
+
+def _load_urls() -> dict:
+    try:
+        return json.loads(_URL_STORE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+@mcp.tool()
+def get_artifact_url(view: str, region: str | None = None) -> dict[str, Any]:
+    """Canonical bookmarked artifact URL for a view ('exec'|'region'|'se'), if one was
+    published before. Region needs `region`. Returns {url} or {url: null}. Used by the
+    scheduled Cowork task to REDEPLOY to the same URL (stable bookmark), not mint a new one."""
+    return {"key": _url_key(view, region), "url": _load_urls().get(_url_key(view, region))}
+
+
+@mcp.tool()
+def set_artifact_url(view: str, url: str, region: str | None = None) -> dict[str, Any]:
+    """Persist the artifact URL for a view after (re)publishing, so future runs redeploy to
+    the same URL. Call this right after creating/updating the artifact."""
+    urls = _load_urls()
+    urls[_url_key(view, region)] = url
+    _URL_STORE.parent.mkdir(parents=True, exist_ok=True)
+    _URL_STORE.write_text(json.dumps(urls, indent=2))
+    return {"ok": True, "key": _url_key(view, region), "url": url}
+
+
+@mcp.tool()
+def render_presentation(view: str, region: str | None = None, se: str | None = None) -> dict[str, Any]:
+    """
+    Build a SELF-CONTAINED HTML presentation artifact (screen-share-ready dashboard) for
+    Template SE numbers. view: 'exec' (org) | 'region' (needs `region`, e.g. "EMEA-APAC")
+    | 'se' (needs `se` email). Returns {html, view, url, instructions}.
+
+    IMPORTANT for the caller: create/redeploy an Artifact whose ENTIRE content is the
+    returned `html`, VERBATIM — never retype numbers, never edit the HTML. Numbers are
+    checksum-protected (a red banner fires if the blob is corrupted). Then call
+    `set_artifact_url(view, url[, region])` with the resulting artifact URL, and (scheduled
+    runs) post that URL to the audience's Slack channel.
+    """
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    if _render is None:
+        return {"error": "render module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    import datetime as _dt
+    now = _dt.datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    items = _se_items(pulled)
+    bl = _weekly_baseline()
+    prev = bl["items"] if bl else None
+    if view == "exec":
+        digest = _with_since(_analyze.exec_digest(items, today, prev_items=prev), bl)
+    elif view == "region":
+        if not region:
+            return {"error": "region required for view='region' (e.g. 'EMEA-APAC')"}
+        digest = _with_since(_analyze.region_digest(items, region, today, prev_items=prev), bl)
+    elif view == "se":
+        if not se:
+            return {"error": "se (email) required for view='se'"}
+        digest = _analyze.se_digest(items, se, today)
+    else:
+        return {"error": "view must be 'exec' | 'region' | 'se'"}
+    prov = {"source": "local MCP api-key", "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"),
+            "universe": pulled["total"]}
+    html = _render.build_artifact(view, digest, prov, now.strftime("%Y-%m-%dT%H:%M:%S"))
+    key = _url_key(view, region)
+    return {"view": view, "key": key, "html": html, "url": _load_urls().get(key),
+            "instructions": "Create/redeploy an artifact whose ENTIRE content is `html`, "
+                            "verbatim. Then call set_artifact_url(view, url[, region])."}
+
+
+@mcp.tool()
+def post_slack_dm(recipient: str, text: str) -> dict[str, Any]:
+    """
+    DM a person in Slack via the team's bot identity ("SE Co-Pilot Agent"), not as the
+    connected Claude account. `recipient` is a Slack user id (U...) or an email (resolved
+    via users.lookupByEmail). Requires SLACK_BOT_TOKEN (env or credentials.json) — never
+    logs the token.
+
+    Use this for scheduled/unattended digests (e.g. a Cowork schedule DMing an SE their own
+    get_se_digest) where the message should read as coming from the shared bot, not from
+    whoever's Claude account happens to be running the schedule. For interactive chat, the
+    standard Slack connector (posts as the user) is usually the right choice instead — this
+    tool is specifically for the bot-identity case.
+    """
+    token = _resolve_slack_token()
+    if not token:
+        return {"error": True, "message": "SLACK_BOT_TOKEN not found (env or credentials.json)"}
+    uid = recipient
+    if "@" in recipient:
+        r = _slack_lookup_user(recipient, token)
+        if r.get("error"):
+            return r
+        uid = r["user_id"]
+    data = json.dumps({"channel": uid, "text": text}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage", data=data, method="POST",
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + token},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return {"ok": bool(body.get("ok")), "error": None if body.get("ok") else body.get("error")}
+    except urllib.error.URLError as e:
+        return {"error": True, "message": f"network failure: {e}"}
 
 
 # ---------------------------------------------------------------------------
