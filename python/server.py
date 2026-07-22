@@ -637,6 +637,58 @@ def get_se_digest(email: str) -> dict[str, Any]:
     return _digest_prov(_with_since(out, bl), pulled)
 
 
+_ALERT_STATE_STORE = Path.home() / ".cache" / "rocketlane" / "alert_state.json"
+
+
+def _load_alert_state(email: str) -> dict:
+    try:
+        return json.loads(_ALERT_STATE_STORE.read_text()).get(email, {})
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_alert_state(email: str, state: dict) -> None:
+    try:
+        all_state = json.loads(_ALERT_STATE_STORE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        all_state = {}
+    all_state[email] = state
+    _ALERT_STATE_STORE.parent.mkdir(parents=True, exist_ok=True)
+    _ALERT_STATE_STORE.write_text(json.dumps(all_state, indent=2))
+
+
+@mcp.tool()
+def get_stalled_alerts(email: str) -> dict[str, Any]:
+    """
+    Trigger #1 (stalled-opp alert), deduped: returns ONLY the overdue opportunities that are
+    NEW since the last call for this email, or whose overdue severity crossed a new 30-day
+    threshold, or whose project status changed — never the same unchanged alert twice in a
+    row. Designed for a DAILY Cowork schedule: call this (not `get_se_digest`) for the
+    alert use case, and only send a Slack DM when `alerts` is non-empty.
+
+    Persists per-email alert state in ~/.cache/rocketlane/alert_state.json between calls
+    (this MCP is otherwise stateless). email e.g. "djan.magno@vtex.com".
+
+    Returns: {alerts: [...], count, _provenance}. Each alert has projectId, name, stage,
+    acv, closed_forecast, macro, owner, status, overdue_days.
+    """
+    if _analyze is None:
+        return {"error": "analyze module unavailable next to server.py"}
+    pulled = _pull_all_projects()
+    if "error" in pulled:
+        return pulled
+    import datetime as _dt
+    today = _dt.datetime.now().strftime("%Y-%m-%d")
+    items = _se_items(pulled)
+    mine = _analyze._my_items(items, email)
+    overdue = _analyze.overdue(mine, today)["opps"]
+    prev_state = _load_alert_state(email)
+    alerts, new_state = _analyze.stalled_alerts(overdue, prev_state, today)
+    _save_alert_state(email, new_state)
+    return {"alerts": alerts, "count": len(alerts),
+            "_provenance": {"source": "local MCP api-key", "universe": len(items), "as_of": today}}
+
+
 # ---------------------------------------------------------------------------
 # Presentation artifacts (render + URL registry)
 # ---------------------------------------------------------------------------
