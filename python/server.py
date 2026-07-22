@@ -669,6 +669,10 @@ def get_stalled_alerts(email: str) -> dict[str, Any]:
     Persists per-email alert state in ~/.cache/rocketlane/alert_state.json between calls
     (this MCP is otherwise stateless). email e.g. "djan.magno@vtex.com".
 
+    Scoped strictly to opportunities this email OWNS (unlike get_se_digest's "my book", which
+    also includes opps where you're just a team member) — an alert must always DM the actual
+    owner, never a teammate who happens to share the project.
+
     Returns: {alerts: [...], count, _provenance}. Each alert has projectId, name, stage,
     acv, closed_forecast, macro, owner, status, overdue_days.
     """
@@ -680,8 +684,9 @@ def get_stalled_alerts(email: str) -> dict[str, Any]:
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
     items = _se_items(pulled)
-    mine = _analyze._my_items(items, email)
-    overdue = _analyze.overdue(mine, today)["opps"]
+    e = (email or "").lower()
+    owned = [(p, r) for p, r in items if r["owner_email"].lower() == e]
+    overdue = _analyze.overdue(owned, today)["opps"]
     prev_state = _load_alert_state(email)
     alerts, new_state = _analyze.stalled_alerts(overdue, prev_state, today)
     _save_alert_state(email, new_state)
