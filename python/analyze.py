@@ -399,10 +399,33 @@ def scorecard(items, as_of=None):
 def overdue(items, today):
     """At-risk WITHOUT proxy: Opp Closed Date in the past but stage still open."""
     out = [{"projectId": p, "name": r["name"], "stage": r["stage"], "acv": acvn(r["acv"]),
-            "closed_forecast": r["closed"], "macro": r["macro"], "owner": r["owner"]}
+            "closed_forecast": r["closed"], "macro": r["macro"], "owner": r["owner"],
+            "status": r["status"]}
            for p, r in items if _is_open(r) and r["closed"] and r["closed"] < today]
     out.sort(key=lambda x: x["closed_forecast"])
     return {"count": len(out), "opps": out}
+
+
+def stalled_alerts(overdue_items: list[dict], prev_state: dict[str, dict], today: str, bucket_days: int = 30) -> tuple[list[dict], dict[str, dict]]:
+    """Dedup layer for Trigger #1 (stalled-opp alerts): given the current `overdue` list (see
+    `overdue()`) and the previous alert state `{projectId: {"status", "bucket"}}`, return only
+    the opps that are NEW to overdue, or whose overdue severity crossed a new `bucket_days`
+    threshold (e.g. 0-29d / 30-59d / 60-89d...), or whose project `status` changed — plus the
+    updated state to persist for next time. Pure function, no I/O and no wall-clock (`today` is
+    passed in; caller persists the returned state)."""
+    new_state: dict[str, dict] = {}
+    alerts: list[dict] = []
+    for o in overdue_items:
+        pid = str(o["projectId"])
+        days = _days_between(o["closed_forecast"], today) or 0
+        bucket = days // bucket_days
+        status = o.get("status")
+        entry = {"status": status, "bucket": bucket}
+        new_state[pid] = entry
+        prev = prev_state.get(pid)
+        if prev is None or prev.get("bucket") != bucket or prev.get("status") != status:
+            alerts.append({**o, "overdue_days": days})
+    return alerts, new_state
 
 
 def hygiene_by_owner(items):
