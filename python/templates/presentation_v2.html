@@ -168,6 +168,12 @@
       (m.rows||[]).forEach(function(r){var tr=e("tr");tr.appendChild(e("td",null,r.owner));
         (m.columns||[]).forEach(function(c){var v=r.counts[c]||0;tr.appendChild(e("td","num"+(c==="(no stage)"&&v?" nostage":""),v||"·"));});
         tr.appendChild(e("td","num tot",r.total));t.appendChild(tr);});return t;}
+    function sePhaseTable(m,opts){opts=opts||{};var t=matrixTable(m);var rows=m.rows||[];var trs=t.querySelectorAll("tr");
+      rows.forEach(function(r,ix){var owner=trs[ix+1].firstChild;
+        if(opts.showRegions&&r.regions&&r.regions.length)owner.appendChild(e("span","chip",r.regions.join(", ")));
+        if(r.stale_count)owner.appendChild(e("span","flag","⚠ "+r.stale_count+" stale"));
+        if(r.no_task_activity_count)owner.appendChild(e("span","flag",r.no_task_activity_count+" no activity"));});
+      return t;}
     function pill(sev,n){var p=e("span","pill "+sev);p.appendChild(e("span","dot "+sev));p.appendChild(document.createTextNode(" "+n));return p;}
     function top5Block(to){var w=e("div");var sm=e("div","status-strip");
       sm.appendChild(pill("red",(to.summary&&to.summary.red)||0));sm.appendChild(pill("yellow",(to.summary&&to.summary.yellow)||0));sm.appendChild(pill("green",(to.summary&&to.summary.green)||0));w.appendChild(sm);
@@ -202,7 +208,8 @@
       if(cfg.next&&cfg.next.length){i.appendChild(e("div","hero-label","Next steps"));var cl=e("ul","checklist");cfg.next.forEach(function(t){cl.appendChild(e("li","","☐ "+t));});i.appendChild(cl);}
       if(cfg.footHTML){var f=e("div","foot");f.innerHTML=cfg.footHTML;i.appendChild(f);}return slide("close",i);}
     function provFoot(prov,P){return "Source: "+(prov.source||"Rocketlane (api-key)")+" · universe "+(prov.universe!=null?prov.universe:"?")+
-      " · Template SE (520608)<br>as_of "+(prov.as_of||"?")+" · template "+(P.template_version||"?")+" · generated "+(P.generated_ts||"?")+" · ✓ integrity verified (checksum)";}
+      " · Template SE (520608)<br>as_of "+(prov.as_of||"?")+" · template "+(P.template_version||"?")+" · generated "+(P.generated_ts||"?")+" · ✓ integrity verified (checksum)"+
+      (prov.task_fetch_failures?(" · ⚠ "+prov.task_fetch_failures+" project(s) task fetch failed — excluded from SE×Phase this run"):"");}
 
     // ============ EXEC ============
     function execSlides(P){var d=P.digest,prov=P.prov||{},S=[];
@@ -211,7 +218,7 @@
       S.push(cover({kicker:"SE Governance Review",parts:[{t:"Solution Engineering "},{t:"Governance",ac:true}],
         subtitle:"Portfolio health, win-rate and data confidence · Template SE",
         credit:{name:"Solution Engineering",role:"· as of "+String(prov.as_of||"").slice(0,10)}}));
-      S.push(agenda(["Open pipeline","Win-rate this half","Pipeline by region","Data confidence","Top losses","This week","Read & next steps"]));
+      S.push(agenda(["Open pipeline","Win-rate this half","Pipeline by region","Opportunities per SE by phase","Data confidence","Top losses","This week","Read & next steps"]));
       S.push(numSlide({kicker:"Open pipeline",hero:usd(totA),pink:true,heroLabel:totC+" open opportunities · Template SE",
         caveat:"ACV is the reliable measure. GMV omitted — outliers inflate open pipeline to ~$17bn."}));
       if(lh)S.push(numSlide({kicker:"Win-rate · "+lh.label,hero:band(lh.w)||"—",heroLabel:lh.w.won+" won · "+lh.w.lost+" lost",
@@ -222,6 +229,9 @@
       S.push(numSlide({title:"Open pipeline by region",
         viz:funnelRows(regs.map(function(x){return{lab:x.r,val:x.o.open_acv||0,valTxt:"<b>"+usd(x.o.open_acv)+"</b> · "+x.o.open_count+" · cov "+pct(x.o._coverage&&x.o._coverage.coverage)};}),maxA),
         caveat:"Open ACV by region. Coverage = % of the region's opps with a classifiable stage."}));
+      S.push(numSlide({title:"Opportunities per SE by phase",node:sePhaseTable(d.se_by_phase||{},{showRegions:true}),
+        caveat:((d.se_by_phase&&d.se_by_phase.caveat)||"Phase is inferred from playbook task status, not a native Rocketlane field.")+
+          " Org-wide, across every region — each SE tagged with the region(s) they have projects in. “Stale” = a later phase task done while an earlier one is still To do. “No activity” = nothing in the playbook has been touched."}));
       S.push(numSlide({title:"Data confidence",
         viz:meterRows([{lab:"Staged",frac:sc.pct_staged,txt:pct(sc.pct_staged),tick:0.9},
           {lab:"Owner attributed",frac:1-(sc.pct_salesforce_owned||0),txt:pct(1-(sc.pct_salesforce_owned||0))},
@@ -246,7 +256,7 @@
         subtitle:"Regional pipeline and governance · Template SE",
         credit:{name:"Solution Engineering",role:"· as of "+String(prov.as_of||"").slice(0,10)}}));
       var ov=d.at_risk_overdue||{count:0};
-      S.push(agenda(["Open pipeline","Opps per SE by stage","Top 5 opportunities","This week — highlights & lowlights","Team hygiene","Read & next steps"]));
+      S.push(agenda(["Open pipeline","Opps per SE by stage","Opps per SE by phase","Top 5 opportunities","This week — highlights & lowlights","Team hygiene","Read & next steps"]));
       var bs=f.by_stage||{};var st=Object.keys(bs).map(function(k){return{k:k,c:bs[k]};}).sort(function(a,b){return (b.c.acv||0)-(a.c.acv||0);});
       var maxA=Math.max.apply(null,st.map(function(x){return x.c.acv||0}).concat([1]));
       S.push(numSlide({kicker:"Open pipeline",hero:usd(f.open_acv),pink:true,heroLabel:(f.open_count||0)+" open · "+(d.opps||0)+" total",chip:covChip(f._coverage),
@@ -254,6 +264,9 @@
         caveat:(d.no_stage?("⚠ "+d.no_stage+" opps with no stage. "):"")+"ACV shown; GMV omitted (outliers). Region win-rate reported only for Brazil & EMEA-APAC (others n<5)."}));
       S.push(numSlide({title:"Opportunities per SE by stage",node:matrixTable(d.se_by_stage||{}),
         caveat:"Volume by SE — not a performance ranking. “No stage” opps sit outside the funnel until classified."}));
+      S.push(numSlide({title:"Opportunities per SE by phase",node:sePhaseTable(d.se_by_phase||{}),
+        caveat:((d.se_by_phase&&d.se_by_phase.caveat)||"Phase is inferred from playbook task status, not a native Rocketlane field.")+
+          " “Stale” = a later phase task done while an earlier one is still To do. “No activity” = nothing in the playbook has been touched."}));
       S.push(numSlide({title:"Top opportunities by status",node:top5Block(d.top_opps||{}),
         caveat:"Top 5 by ACV; colour = health (🔴 at risk / 🟡 watch / 🟢 healthy). The strip shows region totals per status."}));
       S.push(numSlide({title:"This week — highlights & lowlights",node:movementBlock(d.movement),
@@ -282,7 +295,12 @@
       var total=slides.length,cur=0;var counter=document.getElementById("counter"),prog=document.getElementById("prog");
       function setCur(ix){cur=ix;counter.textContent=("0"+(ix+1)).slice(-2)+" / "+("0"+total).slice(-2);prog.style.width=((ix+1)/total*100)+"%";}
       setCur(0);
-      var io=new IntersectionObserver(function(ents){ents.forEach(function(en){if(en.isIntersecting){en.target.classList.add("in");setCur(slides.indexOf(en.target));}});},{threshold:0.55});
+      // Low threshold (NOT 0.5+): a slide taller than 100vh (long table, many rows) can
+      // never reach a high visible-fraction ratio at any scroll position, so a high
+      // threshold permanently withholds the reveal (.in) for that slide — reproduced on
+      // the exec "Opportunities per SE by phase" slide once it grew past one viewport.
+      // Any-visible firing works for both normal and overflowing slides.
+      var io=new IntersectionObserver(function(ents){ents.forEach(function(en){if(en.isIntersecting){en.target.classList.add("in");setCur(slides.indexOf(en.target));}});},{threshold:0.05});
       slides.forEach(function(s){io.observe(s);});slides[0].classList.add("in");
       function go(ix){ix=Math.max(0,Math.min(total-1,ix));slides[ix].scrollIntoView({behavior:"smooth"});}
       document.addEventListener("keydown",function(ev){

@@ -29,6 +29,33 @@ _MACRO_REGION_MAP = {"United States": "USA", "EMEA - APAC": "EMEA-APAC"}
 STAGE_ORDER = ["Qualification", "Active Pursuit", "Scope & Validate", "Proposal",
                "Negotiate", "Commit & Signing", "Won", "Lost"]
 
+# --- SE x Phase (task-derived) ---------------------------------------------
+# "Phase" is NOT a native Rocketlane field. Inferred from playbook task
+# completion status (see infer_phase / se_by_phase below). Index = progression order.
+STANDARD_PHASE_SEQUENCE = [
+    "Discovery Meeting", "Discovery Document", "RFP", "Demo",
+    "Any specific requirement covered", "POC", "Solution Design Document",
+    "Architecture", "PS proposal request", "Knowledge Transfer Document to PS",
+    "Handover to PS",
+]
+
+# Collapse the 11 raw playbook task names into 6 report-facing buckets.
+PHASE_BUCKET_MAP = {
+    "Discovery Meeting": "Discovery Meeting", "Discovery Document": "Discovery Meeting",
+    "RFP": "RFP",
+    "Demo": "Demo", "Any specific requirement covered": "Demo",
+    "POC": "POC",
+    "Solution Design Document": "Solution Design", "Architecture": "Solution Design",
+    "PS proposal request": "Closing/Handover",
+    "Knowledge Transfer Document to PS": "Closing/Handover",
+    "Handover to PS": "Closing/Handover",
+}
+
+# Fixed, always-present column order for se_by_phase (unlike se_by_stage's dynamic
+# columns) — includes "Unknown" for projects with no playbook tasks.
+PHASE_BUCKETS = ["Discovery Meeting", "RFP", "Demo", "POC", "Solution Design",
+                 "Closing/Handover", "Unknown"]
+
 
 def normalize_macro_region(r: str | None) -> str:
     if not r:
@@ -473,6 +500,93 @@ def se_by_stage(items):
     return {"columns": cols, "rows": rows, "total": sum(r["total"] for r in rows)}
 
 
+def infer_phase(tasks: list[dict]) -> dict[str, Any]:
+    """Infer the playbook 'phase' for ONE project from its raw /tasks list. Pure.
+    Exact-string, case-sensitive match against STANDARD_PHASE_SEQUENCE — ad-hoc/custom
+    task names (e.g. "RFI", "NDA") are ignored entirely and never shift the phase.
+    Sequence tasks never created for this project are simply absent from `playbook`,
+    not treated as "To do". Tie-break for multiple simultaneous in-progress/blocked
+    tasks is the EARLIEST one in sequence (the actual bottleneck), not the furthest-along
+    — validated 2026-08-12 against live fixture data (see the "RedSea" project case).
+
+    Status values observed live: 1=To do, 2=In progress, 3=Completed, 4=Blocked,
+    5=On hold (undocumented in the original spec, found live on EMEA-APAC projects —
+    treated as an active/stalled state, same bucket as In progress/Blocked). Any other
+    unrecognized status value is treated as no meaningful progress rather than crashing.
+    """
+    seq = STANDARD_PHASE_SEQUENCE
+    idx = {name: i for i, name in enumerate(seq)}
+    playbook = sorted((t for t in tasks if t.get("taskName") in idx),
+                       key=lambda t: idx[t["taskName"]])
+
+    if not playbook:
+        return {"phase": "Unknown", "bucket": "Unknown", "stale": False,
+                "no_task_activity": False, "no_playbook_tasks": True}
+
+    def sv(t):
+        return (t.get("status") or {}).get("value")
+
+    touched = [t for t in playbook if sv(t) != 1]
+    if not touched:
+        phase = seq[0]
+        no_task_activity = True
+    else:
+        no_task_activity = False
+        active = [t for t in touched if sv(t) in (2, 4, 5)]
+        if active:
+            phase = min(active, key=lambda t: idx[t["taskName"]])["taskName"]
+        else:
+            completed_idxs = [idx[t["taskName"]] for t in touched if sv(t) == 3]
+            if completed_idxs:
+                last_done = max(completed_idxs)
+                phase = seq[last_done + 1] if last_done + 1 < len(seq) else seq[-1]
+            else:
+                # every touched task carries an unrecognized status value — no
+                # signal to advance on, don't crash.
+                phase = seq[0]
+                no_task_activity = True
+
+    phase_idx = idx[phase]
+    stale = any(idx[t["taskName"]] < phase_idx and sv(t) == 1 for t in playbook)
+
+    return {"phase": phase, "bucket": PHASE_BUCKET_MAP.get(phase, "Unknown"),
+            "stale": stale, "no_task_activity": no_task_activity, "no_playbook_tasks": False}
+
+
+def se_by_phase(items: list[tuple[str, dict]], tasks_by_project: dict[str, list[dict]]) -> dict[str, Any]:
+    """Opportunity count per SE (owner) x inferred Phase — mirrors se_by_stage's shape,
+    except columns are FIXED (PHASE_BUCKETS), always present. No I/O: tasks_by_project is
+    supplied by the caller. A project id absent from tasks_by_project (e.g. a fetch
+    failure) is treated as "no playbook tasks" -> bucket "Unknown", never a crash.
+    Each row also carries `regions`: the sorted macro regions the SE has projects in —
+    trivially one region when `items` is already region-scoped (region_digest), but
+    meaningful when `items` is the full org-wide book (exec_digest), where an SE can
+    span multiple regions."""
+    by_owner: dict[str, dict] = {}
+    stale_by_owner: dict[str, int] = {}
+    no_activity_by_owner: dict[str, int] = {}
+    regions_by_owner: dict[str, set] = {}
+    for pid, r in items:
+        owner = r["owner"] or "(no owner)"
+        info = infer_phase(tasks_by_project.get(str(pid), []))
+        by_owner.setdefault(owner, {b: 0 for b in PHASE_BUCKETS})
+        by_owner[owner][info["bucket"]] += 1
+        regions_by_owner.setdefault(owner, set()).add(r["macro"])
+        if info["stale"]:
+            stale_by_owner[owner] = stale_by_owner.get(owner, 0) + 1
+        if info["no_task_activity"]:
+            no_activity_by_owner[owner] = no_activity_by_owner.get(owner, 0) + 1
+
+    rows = [{"owner": o, "counts": dict(by_owner[o]),
+             "regions": sorted(regions_by_owner[o]),
+             "stale_count": stale_by_owner.get(o, 0),
+             "no_task_activity_count": no_activity_by_owner.get(o, 0),
+             "total": sum(by_owner[o].values())} for o in sorted(by_owner)]
+    return {"columns": list(PHASE_BUCKETS), "rows": rows,
+            "total": sum(r["total"] for r in rows),
+            "caveat": "Phase is inferred from playbook task status, not a native Rocketlane field."}
+
+
 def top_opps(items, today, n=5):
     """Top-N opportunities by ACV, each carrying its health status (🔴/🟡/🟢), plus a
     status-count summary — the region leader's 'top 5 opps categorized by status'."""
@@ -551,7 +665,7 @@ def _movement(cur_items, prev_items, today):
     return week_movement({p: r for p, r in prev_items}, {p: r for p, r in cur_items}, today)
 
 
-def region_digest(items, macro, today, prev_items=None):
+def region_digest(items, macro, today, prev_items=None, tasks_by_project=None):
     reg = [(p, r) for p, r in items if r["macro"] == macro]
     total = len(reg)
     prev_reg = ([(p, r) for p, r in prev_items if r["macro"] == macro]
@@ -559,6 +673,7 @@ def region_digest(items, macro, today, prev_items=None):
     return {"region": macro, "opps": total,
             "funnel": pipeline(reg, today),
             "se_by_stage": se_by_stage(reg),
+            "se_by_phase": se_by_phase(reg, tasks_by_project or {}),
             "top_opps": top_opps(reg, today),
             "hygiene_by_se": hygiene_by_owner(reg),
             "at_risk_overdue": overdue(reg, today),
@@ -581,7 +696,7 @@ def half_windows(today, n=4):
     return out
 
 
-def exec_digest(items, today, start=None, end=None, prev_items=None):
+def exec_digest(items, today, start=None, end=None, prev_items=None, tasks_by_project=None):
     # Win-rate: a trend across recent halves (a single "current half" is near-empty
     # early in a half — the VP wants the trajectory). Custom window if given.
     if start and end:
@@ -593,4 +708,5 @@ def exec_digest(items, today, start=None, end=None, prev_items=None):
             "org_winrate_trend": wr_trend,
             "movement": _movement(items, prev_items, today),
             "pipeline_region_stage": {reg: pipeline([(p, r) for p, r in items if r["macro"] == reg], today)
-                                      for reg in sorted({r["macro"] for _, r in items})}}
+                                      for reg in sorted({r["macro"] for _, r in items})},
+            "se_by_phase": se_by_phase(items, tasks_by_project or {})}

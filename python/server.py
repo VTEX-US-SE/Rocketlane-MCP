@@ -577,9 +577,16 @@ def _digest_prov(out: dict, pulled: dict) -> dict:
 def get_exec_digest(from_date: str | None = None, to_date: str | None = None) -> dict[str, Any]:
     """
     VP dashboard (Template SE), server-side → small result: data-quality scorecard by
-    Macro Region, org win-rate TREND across recent halves (strict + sensitivity), and
-    the Region×Stage open-pipeline funnel. Every block carries its coverage/denominator.
-    Optional from_date/to_date ('YYYY-MM-DD') pins the win-rate window instead of the trend.
+    Macro Region, org win-rate TREND across recent halves (strict + sensitivity), the
+    Region×Stage open-pipeline funnel, and org-wide SE×Phase (task-inferred playbook
+    progress, each SE tagged with the region(s) they have projects in). Every block
+    carries its coverage/denominator. Optional from_date/to_date ('YYYY-MM-DD') pins the
+    win-rate window instead of the trend.
+
+    se_by_phase spans the WHOLE SE book (not one region) — the task fetch is
+    correspondingly larger than get_region_digest's, still cache-first and
+    bounded-concurrency. Partial per-project fetch failures never fail the call; that
+    project buckets "Unknown" and the count is at _provenance.task_fetch_failures.
     """
     if _analyze is None:
         return {"error": "analyze module unavailable next to server.py"}
@@ -589,18 +596,29 @@ def get_exec_digest(from_date: str | None = None, to_date: str | None = None) ->
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
     bl = _weekly_baseline()
-    out = _analyze.exec_digest(_se_items(pulled), today, from_date, to_date,
-                               prev_items=(bl["items"] if bl else None))
-    return _digest_prov(_with_since(out, bl), pulled)
+    se_items = _se_items(pulled)
+    tasks_by_project, failed = _fetch_tasks_bounded([p for p, _ in se_items])
+    out = _analyze.exec_digest(se_items, today, from_date, to_date,
+                               prev_items=(bl["items"] if bl else None),
+                               tasks_by_project=tasks_by_project)
+    out = _digest_prov(_with_since(out, bl), pulled)
+    out["_provenance"]["task_fetch_failures"] = len(failed)
+    return out
 
 
 @mcp.tool()
 def get_region_digest(macro_region: str) -> dict[str, Any]:
     """
     Macro-Region leader digest (Template SE), server-side: open-pipeline funnel by stage,
-    data-completeness by SE, and at-risk = opps whose Opp Closed Date is past but stage is
-    still open (a derivable overdue signal, no activity proxy). macro_region e.g. "EMEA-APAC",
-    "Brazil", "North LATAM", "South LATAM", "USA".
+    data-completeness by SE, SE x Stage AND SE x Phase (task-inferred playbook progress)
+    breakdowns, and at-risk = opps whose Opp Closed Date is past but stage is still open.
+    macro_region e.g. "EMEA-APAC", "Brazil", "North LATAM", "South LATAM", "USA".
+
+    se_by_phase is inferred from playbook task completion status (NOT a native
+    Rocketlane field) via a bounded-concurrency /tasks fetch per project, cached ~15 min
+    in ~/.cache/rocketlane/tasks_cache.json. A per-project task-fetch failure never fails
+    the whole call — that project just buckets "Unknown" in se_by_phase; failure count is
+    at _provenance.task_fetch_failures.
     """
     if _analyze is None:
         return {"error": "analyze module unavailable next to server.py"}
@@ -610,9 +628,15 @@ def get_region_digest(macro_region: str) -> dict[str, Any]:
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
     bl = _weekly_baseline()
-    out = _analyze.region_digest(_se_items(pulled), macro_region, today,
-                                 prev_items=(bl["items"] if bl else None))
-    return _digest_prov(_with_since(out, bl), pulled)
+    se_items = _se_items(pulled)
+    reg_items = [(p, r) for p, r in se_items if r["macro"] == macro_region]
+    tasks_by_project, failed = _fetch_tasks_bounded([p for p, _ in reg_items])
+    out = _analyze.region_digest(se_items, macro_region, today,
+                                 prev_items=(bl["items"] if bl else None),
+                                 tasks_by_project=tasks_by_project)
+    out = _digest_prov(_with_since(out, bl), pulled)
+    out["_provenance"]["task_fetch_failures"] = len(failed)
+    return out
 
 
 @mcp.tool()
@@ -655,6 +679,115 @@ def _save_alert_state(email: str, state: dict) -> None:
     all_state[email] = state
     _ALERT_STATE_STORE.parent.mkdir(parents=True, exist_ok=True)
     _ALERT_STATE_STORE.write_text(json.dumps(all_state, indent=2))
+
+
+_TASKS_CACHE_STORE = Path.home() / ".cache" / "rocketlane" / "tasks_cache.json"
+_TASKS_CACHE_TTL_S = 15 * 60
+
+
+def _load_tasks_cache() -> dict:
+    try:
+        return json.loads(_TASKS_CACHE_STORE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_tasks_cache(cache: dict) -> None:
+    _TASKS_CACHE_STORE.parent.mkdir(parents=True, exist_ok=True)
+    _TASKS_CACHE_STORE.write_text(json.dumps(cache, indent=2))
+
+
+import threading as _threading  # noqa: E402
+
+# Global pacer for /tasks fetches: Rocketlane caps non-GET-all calls at 400/min
+# (README.md/docs/endpoints.md). A ThreadPoolExecutor with several concurrent workers
+# dispatches far faster than that once responses are quick (observed: 8 workers over a
+# large org-wide batch produced ~1200/min and a wave of 429s -> most projects falling
+# back to "Unknown"). This lock+timestamp pair serializes dispatch so no matter how many
+# threads are racing to fetch, requests leave at most every _TASKS_MIN_INTERVAL_S apart —
+# a safety margin under the real cap, shared globally across all callers in this process.
+_TASKS_RATE_LOCK = _threading.Lock()
+_TASKS_LAST_DISPATCH = [0.0]
+_TASKS_MIN_INTERVAL_S = 60.0 / 300  # 300/min sustained, ~25% margin under the 400/min cap
+
+
+def _tasks_rate_limit_wait() -> None:
+    import time
+    with _TASKS_RATE_LOCK:
+        now = time.time()
+        wait = _TASKS_LAST_DISPATCH[0] + _TASKS_MIN_INTERVAL_S - now
+        if wait > 0:
+            time.sleep(wait)
+            now = time.time()
+        _TASKS_LAST_DISPATCH[0] = now
+
+
+def _fetch_tasks_for_project(pid: str, max_pages: int = 5, max_retries: int = 4) -> list[dict]:
+    """All tasks for one project, following nextPageToken defensively (observed 12-16
+    tasks/project live, so pageSize=100 is almost always a single page). Every request
+    (including retries) goes through the global rate limiter; a 429/error retries with
+    exponential backoff before giving up."""
+    import time
+    out: list[dict] = []
+    q: dict[str, Any] = {"projectId.eq": pid, "pageSize": 100}
+    pages = 0
+    while True:
+        res = None
+        for attempt in range(max_retries):
+            _tasks_rate_limit_wait()
+            res = _call("GET", "/tasks", q)
+            if not res.get("error"):
+                break
+            time.sleep(2 ** attempt)  # 1s, 2s, 4s, 8s
+        if res.get("error"):
+            raise RuntimeError(f"tasks fetch failed for project {pid} after {max_retries} attempts: {res}")
+        body = res["body"] if isinstance(res.get("body"), dict) else {}
+        data = body.get("data") or body.get("results") or []
+        if isinstance(data, list):
+            out.extend(data)
+        pagination = body.get("pagination") if isinstance(body.get("pagination"), dict) else body
+        token = pagination.get("nextPageToken")
+        pages += 1
+        if not token or pages >= max_pages:
+            break
+        q["pageToken"] = token
+    return out
+
+
+def _fetch_tasks_bounded(project_ids: list[str], max_workers: int = 8) -> tuple[dict[str, list[dict]], list[str]]:
+    """tasks_by_project, cache-first (TTL _TASKS_CACHE_TTL_S), fanning cache MISSES out
+    over a bounded ThreadPoolExecutor (_call is blocking I/O — safe to parallelize with
+    threads; well within the 400/min non-GET-all rate limit even at 8-10 workers over a
+    full region). Returns (tasks_by_project, failed_project_ids) — a failed project's
+    tasks are simply absent, never raised past this function."""
+    import time
+    import concurrent.futures as cf
+    now = time.time()
+    cache = _load_tasks_cache()
+    tasks_by_project: dict[str, list[dict]] = {}
+    to_fetch: list[str] = []
+    for pid in project_ids:
+        entry = cache.get(pid)
+        if entry and (now - entry.get("as_of_epoch", 0)) < _TASKS_CACHE_TTL_S:
+            tasks_by_project[pid] = entry["tasks"]
+        else:
+            to_fetch.append(pid)
+
+    failed: list[str] = []
+    if to_fetch:
+        with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
+            future_to_pid = {ex.submit(_fetch_tasks_for_project, pid): pid for pid in to_fetch}
+            for fut in cf.as_completed(future_to_pid):
+                pid = future_to_pid[fut]
+                try:
+                    tasks = fut.result()
+                except Exception:
+                    failed.append(pid)
+                    continue
+                tasks_by_project[pid] = tasks
+                cache[pid] = {"as_of_epoch": now, "tasks": tasks}
+        _save_tasks_cache(cache)
+    return tasks_by_project, failed
 
 
 @mcp.tool()
@@ -762,12 +895,20 @@ def render_presentation(view: str, region: str | None = None, se: str | None = N
     items = _se_items(pulled)
     bl = _weekly_baseline()
     prev = bl["items"] if bl else None
+    task_fetch_failures = 0
     if view == "exec":
-        digest = _with_since(_analyze.exec_digest(items, today, prev_items=prev), bl)
+        tasks_by_project, failed = _fetch_tasks_bounded([p for p, _ in items])
+        task_fetch_failures = len(failed)
+        digest = _with_since(_analyze.exec_digest(items, today, prev_items=prev,
+                                                  tasks_by_project=tasks_by_project), bl)
     elif view == "region":
         if not region:
             return {"error": "region required for view='region' (e.g. 'EMEA-APAC')"}
-        digest = _with_since(_analyze.region_digest(items, region, today, prev_items=prev), bl)
+        reg_items = [(p, r) for p, r in items if r["macro"] == region]
+        tasks_by_project, failed = _fetch_tasks_bounded([p for p, _ in reg_items])
+        task_fetch_failures = len(failed)
+        digest = _with_since(_analyze.region_digest(items, region, today, prev_items=prev,
+                                                     tasks_by_project=tasks_by_project), bl)
     elif view == "se":
         if not se:
             return {"error": "se (email) required for view='se'"}
@@ -776,6 +917,8 @@ def render_presentation(view: str, region: str | None = None, se: str | None = N
         return {"error": "view must be 'exec' | 'region' | 'se'"}
     prov = {"source": "local MCP api-key", "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"),
             "universe": pulled["total"]}
+    if view in ("region", "exec"):
+        prov["task_fetch_failures"] = task_fetch_failures
     html = _render.build_artifact(view, digest, prov, now.strftime("%Y-%m-%dT%H:%M:%S"))
     key = _url_key(view, region)
     return {"view": view, "key": key, "html": html, "url": _load_urls().get(key),
