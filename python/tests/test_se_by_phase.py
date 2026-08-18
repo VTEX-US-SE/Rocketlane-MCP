@@ -113,14 +113,14 @@ def test_1209851_on_hold_status_does_not_crash():
 
 def test_se_by_phase_fixed_columns_when_empty():
     out = analyze.se_by_phase([], {})
-    assert out["columns"] == analyze.PHASE_BUCKETS and out["rows"] == [] and out["total"] == 0
+    assert out["columns"] == analyze.SE_BY_PHASE_COLUMNS and out["rows"] == [] and out["total"] == 0
     assert "caveat" in out
 
 
 def test_se_by_phase_aggregates_and_handles_missing_project():
-    items = [("1209846", {"owner": "Diego Cione", "macro": "EMEA-APAC"}),
-             ("1210507", {"owner": "Diego Cione", "macro": "EMEA-APAC"}),
-             ("9999999", {"owner": "Diego Cione", "macro": "EMEA-APAC"})]  # simulates a failed fetch
+    items = [("1209846", {"owner": "Diego Cione", "macro": "EMEA-APAC", "status": "In progress"}),
+             ("1210507", {"owner": "Diego Cione", "macro": "EMEA-APAC", "status": "In progress"}),
+             ("9999999", {"owner": "Diego Cione", "macro": "EMEA-APAC", "status": "In progress"})]  # failed fetch
     tasks_by_project = {"1209846": FIXTURE_1209846, "1210507": FIXTURE_1210507}
     out = analyze.se_by_phase(items, tasks_by_project)
     row = out["rows"][0]
@@ -135,11 +135,72 @@ def test_se_by_phase_aggregates_and_handles_missing_project():
 def test_se_by_phase_tags_multiple_regions_per_se():
     """Org-wide (exec) use case: an SE with projects in more than one macro region
     should get every region they touch, sorted, not just the first one seen."""
-    items = [("1209846", {"owner": "Diego Cione", "macro": "EMEA-APAC"}),
-             ("2000001", {"owner": "Diego Cione", "macro": "Brazil"})]
+    items = [("1209846", {"owner": "Diego Cione", "macro": "EMEA-APAC", "status": "In progress"}),
+             ("2000001", {"owner": "Diego Cione", "macro": "Brazil", "status": "In progress"})]
     out = analyze.se_by_phase(items, {"1209846": FIXTURE_1209846})
     row = out["rows"][0]
     assert row["regions"] == ["Brazil", "EMEA-APAC"]
+
+
+def test_se_by_phase_non_active_status_bypasses_phase_entirely():
+    """The point of this session's fix: Backlog/On Hold/Stand By/Completed/Closed/
+    Cancelled projects must NOT go through infer_phase at all — they're counted by
+    their own project status, even if we hand them tasks that would otherwise resolve
+    to a real phase. Rocketlane's own status field is the single source of truth here,
+    Salesforce never enters into it."""
+    items = [
+        ("1", {"owner": "Ana", "macro": "Brazil", "status": "Backlog"}),
+        ("2", {"owner": "Ana", "macro": "Brazil", "status": "On Hold"}),
+        ("3", {"owner": "Ana", "macro": "Brazil", "status": "Stand By"}),
+        ("4", {"owner": "Ana", "macro": "Brazil", "status": "Completed"}),
+        ("5", {"owner": "Ana", "macro": "Brazil", "status": "Closed"}),
+        ("6", {"owner": "Ana", "macro": "Brazil", "status": "Cancelled"}),
+    ]
+    # every one of these HAS a resolvable phase in its tasks — must be ignored anyway.
+    tasks_by_project = {pid: FIXTURE_1210507 for pid, _ in items}
+    out = analyze.se_by_phase(items, tasks_by_project)
+    row = out["rows"][0]
+    assert row["counts"]["Backlog"] == 1
+    assert row["counts"]["On Hold"] == 2  # Stand By merges into On Hold
+    assert "Completed" not in row["counts"]  # excluded column — not currently active
+    assert "Cancelled" not in row["counts"]  # excluded column — not currently active
+    assert row["counts"]["Solution Design"] == 0  # never inferred — status wasn't In progress
+    assert row["stale_count"] == 0 and row["no_task_activity_count"] == 0
+    assert row["total"] == 3  # only Backlog(1) + On Hold(2) — Completed/Cancelled excluded entirely
+
+
+def test_se_by_phase_unrecognized_status_defaults_to_backlog():
+    items = [("1", {"owner": "Ana", "macro": "Brazil", "status": "Some New Status"}),
+             ("2", {"owner": "Bea", "macro": "Brazil", "status": ""}),
+             ("3", {"owner": "Cia", "macro": "Brazil"})]  # missing "status" key entirely
+    out = analyze.se_by_phase(items, {})
+    by_owner = {r["owner"]: r for r in out["rows"]}
+    assert by_owner["Ana"]["counts"]["Backlog"] == 1
+    assert by_owner["Bea"]["counts"]["Backlog"] == 1
+    assert by_owner["Cia"]["counts"]["Backlog"] == 1
+
+
+def test_se_by_phase_cancelled_and_completed_excluded_entirely():
+    """Completed/Cancelled projects must not appear ANYWHERE in the table: not in a
+    column, not in total, and must not pollute stale_count even when their own tasks
+    look stale. Table only ever reports currently-active opportunities."""
+    items = [("1", {"owner": "Diego Cione", "macro": "EMEA-APAC", "status": "In progress"}),
+             ("2", {"owner": "Diego Cione", "macro": "EMEA-APAC", "status": "Cancelled"}),
+             ("3", {"owner": "Diego Cione", "macro": "EMEA-APAC", "status": "Completed"})]
+    tasks_by_project = {"1": FIXTURE_1209847, "2": FIXTURE_1209847, "3": FIXTURE_1209847}
+    out = analyze.se_by_phase(items, tasks_by_project)
+    row = out["rows"][0]
+    assert row["stale_count"] == 1  # only project "1" (In progress) counts
+    assert row["total"] == 1  # Cancelled + Completed fully excluded, not just uncounted
+    assert "Completed" not in row["counts"] and "Cancelled" not in row["counts"]
+
+
+def test_se_by_phase_owner_with_only_closed_out_projects_is_absent():
+    """An SE whose entire book is Completed/Cancelled shouldn't appear in rows at all —
+    not as a row with all-zero counts, genuinely absent."""
+    items = [("1", {"owner": "Retired SE", "macro": "Brazil", "status": "Cancelled"})]
+    out = analyze.se_by_phase(items, {})
+    assert out["rows"] == [] and out["total"] == 0
 
 
 ALL_TESTS = [v for k, v in list(globals().items()) if k.startswith("test_")]

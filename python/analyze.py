@@ -11,7 +11,9 @@ Kept dependency-free and side-effect-free so the SAME functions can back both th
 """
 from __future__ import annotations
 
+import csv
 import datetime as _dt
+import io
 import re
 from collections import defaultdict
 from typing import Any
@@ -55,6 +57,195 @@ PHASE_BUCKET_MAP = {
 # columns) — includes "Unknown" for projects with no playbook tasks.
 PHASE_BUCKETS = ["Discovery Meeting", "RFP", "Demo", "POC", "Solution Design",
                  "Closing/Handover", "Unknown"]
+
+# Rocketlane's own PROJECT-level status (p["status"]["label"], captured in project_row()
+# as r["status"]) — distinct from the per-TASK status used by infer_phase() above.
+# Observed live across all ~373 Template SE projects (2026-08): In progress, Backlog,
+# On Hold, Stand By, Completed, Cancelled, Closed — no other values seen. "Stand By"
+# merges into "On Hold" and "Closed" merges into "Completed" (same administrative state
+# as their sibling label); anything unrecognized defaults to "Backlog" (no active phase
+# signal, the safest guess). Only "In progress" projects get a phase inferred from tasks
+# — phase progression isn't a meaningful question for a project that isn't active.
+PROJECT_STATUS_BUCKET_MAP = {
+    "In progress": "In progress",
+    "On Hold": "On Hold",
+    "Stand By": "On Hold",
+    "Completed": "Completed",
+    "Closed": "Completed",
+    "Cancelled": "Cancelled",
+    "Backlog": "Backlog",
+}
+
+# Non-phase columns for se_by_phase — opportunities NOT "In progress" are counted here
+# instead of a phase bucket, EXCEPT "Completed"/"Cancelled": those are administratively
+# closed out, not currently active, and are excluded from the table entirely (see
+# se_by_phase's own filter) — this table only ever reports what's currently active.
+STATUS_ONLY_BUCKETS = ["Backlog", "On Hold"]
+
+# Statuses excluded from se_by_phase entirely — closed-out, not "currently active".
+_SE_BY_PHASE_EXCLUDED_STATUSES = ("Completed", "Cancelled")
+
+SE_BY_PHASE_COLUMNS = PHASE_BUCKETS + STATUS_ONLY_BUCKETS
+
+
+def project_status_bucket(status_label: str | None) -> str:
+    return PROJECT_STATUS_BUCKET_MAP.get(status_label or "", "Backlog")
+
+# --- Salesforce weekly pipeline import ---------------------------------------
+# Pipeline/stage/financial/owner/region now come from a weekly SF export (see
+# _load_sf_pipeline in server.py — read live from a fixed Drive-synced path, no
+# separate ingest step), not Rocketlane's synced fields — Rocketlane allows
+# manually-created/edited projects that silently diverge from Salesforce
+# (validated 2026-08: a $20M Rocketlane ACV vs a real $67K SF opportunity for the
+# same deal). Rocketlane's only remaining role is se_by_phase (task-derived,
+# joined back in by sfid — see server.py's wiring).
+
+SF_NAME_MAP = {  # Salesforce "Assigned SE" -> Rocketlane display name
+    "Vagner Figueredo": "Vagner Figueredo Silva Junior",
+    "Felipe Dias": "Felipe Dias",
+    "Leandro Dasler": "leandrodasler",
+    "Salvador Romero": "salvadorromero",
+    "Diego cione": "Diego Cione",
+    "Isabella Fagioli": "isabellafagioli",
+    "Carlos Nieto": "Carlos Nieto",
+    "William Jeanne": "williamjeanne",
+    "Joao Guilherme Porto": "joaoguilherme",
+    "Gabriela Marta": "gabrielamarta",
+    "Manuel Palacios": "manuelpalacios",
+    "Afonso Praça": "Afonso Praça",
+    "Kai Brockelt (Inactive)": "Kai Brockelt",
+    "Ana Mororo (Inactive)": "ana mororo",
+    "Djan Magno": "djanmagno",
+    "Noe Eustaquio": "noeeust",
+    "Luisa Braga": "luisabraga",
+    "Carlos Rivero": "Carlos Celis",
+    "Emeka Nwosu": "emekanwosu",
+}
+
+SF_COUNTRY_TO_MACRO = {
+    "Brazil": "Brazil", "Brasil": "Brazil", "brazil": "Brazil",
+    "Mexico": "North LATAM", "México": "North LATAM", "MX": "North LATAM", "Ecuador": "North LATAM",
+    "Colombia": "South LATAM", "Argentina": "South LATAM", "Peru": "South LATAM", "Chile": "South LATAM",
+    "United States": "USA", "USA": "USA", "USa/Canada/Australia": "USA",
+    "Middle East and Africa": "EMEA-APAC", "Germany": "EMEA-APAC", "France": "EMEA-APAC",
+    "Poland": "EMEA-APAC", "Portugal": "EMEA-APAC", "Spain": "EMEA-APAC",
+    "Eastern Europe": "EMEA-APAC", "Italy": "EMEA-APAC", "United Kingdom": "EMEA-APAC",
+    "India": "EMEA-APAC", "Kenya": "EMEA-APAC", "UK": "EMEA-APAC", "Sri Lanka": "EMEA-APAC",
+    "United Arab Emirates": "EMEA-APAC", "Romania": "EMEA-APAC", "Oceania": "EMEA-APAC",
+    "Europe": "EMEA-APAC", "Algeria": "EMEA-APAC", "Africa": "EMEA-APAC",
+}
+
+
+def _sf_amount(raw: str) -> float | None:
+    raw = (raw or "").strip()
+    if raw in ("", "-"):
+        return None
+    try:
+        return float(raw.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _sf_date(raw: str) -> str:
+    """DD/MM/YYYY -> YYYY-MM-DD, or "" if unparseable/blank."""
+    raw = (raw or "").strip()
+    if raw in ("", "-"):
+        return ""
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
+    if not m:
+        return ""
+    d, mo, y = m.groups()
+    return f"{y}-{int(mo):02d}-{int(d):02d}"
+
+
+def sf_row(rec: dict) -> dict:
+    """Normalize one raw SF CSV record into project_row()'s exact shape, so every
+    existing pure aggregation function (pipeline, scorecard, winrate, se_by_stage,
+    hygiene_by_owner, overdue, top_opps/opp_health, dedupe, region_digest, exec_digest)
+    works unchanged. Unmapped owner names pass through as-is (never dropped)."""
+    owner_raw = (rec.get("Assigned SE") or "").strip()
+    stage = (rec.get("Stage") or "").strip()
+    region = (rec.get("Sales Region") or "").strip()
+    lost_reason = (rec.get("Lost Reason") or "").strip()
+    # The export has two columns both literally named "Opportunity ID" (15-char, then
+    # 18-char). csv.DictReader keeps the LAST duplicate column under the shared key
+    # (verified: it does not pandas-style suffix with ".1"), which happens to be the
+    # 18-char id we want.
+    sfid = (rec.get("Opportunity ID") or "").strip()
+    return {
+        "name": (rec.get("Opportunity Name") or "").strip() or "(sin nombre)",
+        "archived": False,
+        "stage": stage,
+        "closed": _sf_date(rec.get("Close Date", "")),
+        "acv": _sf_amount(rec.get("ACV Preview (USD)", "")),
+        "gmv": None,
+        "sfid": sfid,
+        "loss": "" if lost_reason in ("", "-") else lost_reason,
+        "cancel": "",
+        "region": region,
+        "macro": SF_COUNTRY_TO_MACRO.get(region, "(no region)"),
+        "tpl": "", "tplname": "",
+        "status": "Completed" if stage in ("Won", "Lost") else "",
+        "owner": SF_NAME_MAP.get(owner_raw, owner_raw),
+        "owner_email": "",
+        "created_by": "",
+        "team_emails": [],
+        "created_ms": None,
+        "updatedAt": None,
+    }
+
+
+def parse_sf_pipeline_csv(csv_text: str) -> tuple[list[tuple[str, dict]], dict]:
+    """Parse the raw weekly SF export text into (items, report) — items are (sfid, row)
+    tuples in project_row()'s shape, ready for every existing pure function. The tuple
+    KEY is the NORMALIZED sfid (norm_sfid(raw)), not the raw 18-char string — this MUST
+    match how Rocketlane's side gets normalized in server.py's join (sfid_to_pid is keyed
+    the same way), otherwise the tasks_by_project re-keying for se_by_phase silently
+    matches nothing. `r["sfid"]` in the row dict keeps the raw value (for display),
+    matching Rocketlane's own project_row() convention of storing raw and normalizing at
+    the call site. `report` surfaces validation signals for the caller (never silently
+    swallowed): unmapped_owners, unmapped_regions, duplicate_sfids, rows_missing_id,
+    total_rows."""
+    reader = csv.DictReader(io.StringIO(csv_text))
+    items: list[tuple[str, dict]] = []
+    unmapped_owners, unmapped_regions, seen_ids, dupes = set(), set(), set(), set()
+    missing_id = 0
+    for i, rec in enumerate(reader):
+        owner_raw = (rec.get("Assigned SE") or "").strip()
+        region = (rec.get("Sales Region") or "").strip()
+        if owner_raw and owner_raw not in SF_NAME_MAP:
+            unmapped_owners.add(owner_raw)
+        if region and region not in SF_COUNTRY_TO_MACRO:
+            unmapped_regions.add(region)
+        r = sf_row(rec)
+        key = norm_sfid(r["sfid"]) or f"__noid_{i}"
+        if not norm_sfid(r["sfid"]):
+            missing_id += 1
+        if key in seen_ids:
+            dupes.add(key)
+        seen_ids.add(key)
+        items.append((key, r))
+    report = {"total_rows": len(items), "unmapped_owners": sorted(unmapped_owners),
+              "unmapped_regions": sorted(unmapped_regions),
+              "duplicate_sfids": sorted(dupes), "rows_missing_id": missing_id}
+    return items, report
+
+
+SF_PIPELINE_CAVEAT = ("Pipeline, stage, ACV, owner and region come from the weekly "
+                       "Salesforce export, not Rocketlane's synced fields — Rocketlane "
+                       "is used only for se_by_phase.")
+
+
+def orphan_rocketlane_projects(rl_items: list[tuple[str, dict]], sf_sfids: set) -> list[dict]:
+    """Rocketlane SE-scoped projects whose sfid has no match in the current SF pipeline
+    export — exactly the failure mode that motivated this whole change (a manually
+    created/edited Rocketlane record disconnected from Salesforce reality). Sorted by
+    ACV descending so the biggest risk shows first."""
+    out = [{"projectId": pid, "name": r["name"], "owner": r["owner"], "stage": r["stage"],
+            "acv": acvn(r["acv"]), "macro": r["macro"]}
+           for pid, r in rl_items if norm_sfid(r["sfid"]) and norm_sfid(r["sfid"]) not in sf_sfids]
+    out.sort(key=lambda x: -(x["acv"] or 0))
+    return out
 
 
 def normalize_macro_region(r: str | None) -> str:
@@ -145,6 +336,19 @@ def in_window(d: str, start: str, end: str) -> bool:
     return bool(d) and start <= d <= end
 
 
+def _pid_tiebreak(pid):
+    """Sort key for dedupe()'s tiebreaker: prefer the higher/most-recent id when pids
+    are Rocketlane's own numeric project ids (the original "twin projects" case this
+    was built for). SF-sourced items are keyed by their sfid string instead (not
+    numeric) — falls back to a stable string sort rather than crashing on int(pid).
+    Never mixes within one dedupe() call since items always come from one homogeneous
+    source (all-Rocketlane or all-SF), so the branch taken is consistent per call."""
+    try:
+        return (0, -int(pid))
+    except (TypeError, ValueError):
+        return (1, pid)
+
+
 def dedupe(items: list[tuple[str, dict]]) -> tuple[list[tuple[str, dict]], list]:
     groups = defaultdict(list)
     for pid, r in items:
@@ -152,7 +356,7 @@ def dedupe(items: list[tuple[str, dict]]) -> tuple[list[tuple[str, dict]], list]
         groups[key].append((pid, r))
     out, conflicts = [], []
     for key, ms in groups.items():
-        ms.sort(key=lambda m: (m[1]["archived"], -int(m[0])))
+        ms.sort(key=lambda m: (m[1]["archived"], _pid_tiebreak(m[0])))
         out.append(ms[0])
         if len({m[1]["stage"] for m in ms}) > 1:
             conflicts.append({"key": key, "members": [
@@ -555,36 +759,59 @@ def infer_phase(tasks: list[dict]) -> dict[str, Any]:
 
 def se_by_phase(items: list[tuple[str, dict]], tasks_by_project: dict[str, list[dict]]) -> dict[str, Any]:
     """Opportunity count per SE (owner) x inferred Phase — mirrors se_by_stage's shape,
-    except columns are FIXED (PHASE_BUCKETS), always present. No I/O: tasks_by_project is
-    supplied by the caller. A project id absent from tasks_by_project (e.g. a fetch
-    failure) is treated as "no playbook tasks" -> bucket "Unknown", never a crash.
-    Each row also carries `regions`: the sorted macro regions the SE has projects in —
-    trivially one region when `items` is already region-scoped (region_digest), but
-    meaningful when `items` is the full org-wide book (exec_digest), where an SE can
-    span multiple regions."""
+    except columns are FIXED (SE_BY_PHASE_COLUMNS), always present. No I/O: tasks_by_project
+    is supplied by the caller. `items` MUST be Rocketlane's own project rows (project_row()
+    shape, keyed by Rocketlane project id) — this table reflects Rocketlane's own project
+    status only, never Salesforce's.
+
+    Only currently-active opportunities are reported at all: projects whose Rocketlane
+    status is "Completed" or "Cancelled" (per project_status_bucket) are excluded
+    entirely — not counted in any column, not counted in `total`, and don't contribute an
+    SE's `regions` tag. Of what remains, only "In progress" projects get a phase inferred
+    from their tasks; a project id absent from tasks_by_project for one of those (e.g. a
+    fetch failure) is treated as "no playbook tasks" -> bucket "Unknown", never a crash.
+    "Backlog" and "On Hold" (which also merges "Stand By") are counted directly under
+    their own STATUS_ONLY_BUCKETS column instead — phase progression isn't a meaningful
+    question for a project that isn't actively being worked.
+
+    Each row also carries `regions`: the sorted macro regions the SE has active projects
+    in — trivially one region when `items` is already region-scoped (region_digest), but
+    meaningful when `items` is the full org-wide book (exec_digest), where an SE can span
+    multiple regions. An SE with no active opportunities left after the Completed/
+    Cancelled filter simply doesn't appear in `rows`."""
     by_owner: dict[str, dict] = {}
     stale_by_owner: dict[str, int] = {}
     no_activity_by_owner: dict[str, int] = {}
     regions_by_owner: dict[str, set] = {}
     for pid, r in items:
+        bucket = project_status_bucket(r.get("status"))
+        if bucket in _SE_BY_PHASE_EXCLUDED_STATUSES:
+            continue
         owner = r["owner"] or "(no owner)"
-        info = infer_phase(tasks_by_project.get(str(pid), []))
-        by_owner.setdefault(owner, {b: 0 for b in PHASE_BUCKETS})
-        by_owner[owner][info["bucket"]] += 1
+        by_owner.setdefault(owner, {b: 0 for b in SE_BY_PHASE_COLUMNS})
         regions_by_owner.setdefault(owner, set()).add(r["macro"])
-        if info["stale"]:
-            stale_by_owner[owner] = stale_by_owner.get(owner, 0) + 1
-        if info["no_task_activity"]:
-            no_activity_by_owner[owner] = no_activity_by_owner.get(owner, 0) + 1
+        if bucket == "In progress":
+            info = infer_phase(tasks_by_project.get(str(pid), []))
+            by_owner[owner][info["bucket"]] += 1
+            if info["stale"]:
+                stale_by_owner[owner] = stale_by_owner.get(owner, 0) + 1
+            if info["no_task_activity"]:
+                no_activity_by_owner[owner] = no_activity_by_owner.get(owner, 0) + 1
+        else:
+            by_owner[owner][bucket] += 1
 
     rows = [{"owner": o, "counts": dict(by_owner[o]),
              "regions": sorted(regions_by_owner[o]),
              "stale_count": stale_by_owner.get(o, 0),
              "no_task_activity_count": no_activity_by_owner.get(o, 0),
              "total": sum(by_owner[o].values())} for o in sorted(by_owner)]
-    return {"columns": list(PHASE_BUCKETS), "rows": rows,
+    return {"columns": list(SE_BY_PHASE_COLUMNS), "rows": rows,
             "total": sum(r["total"] for r in rows),
-            "caveat": "Phase is inferred from playbook task status, not a native Rocketlane field."}
+            "caveat": "Phase is inferred from playbook task status and reflects Rocketlane's "
+                      "own project data only (not Salesforce). Only currently-active "
+                      "opportunities are shown — Completed/Cancelled are excluded entirely. "
+                      "In-progress opportunities get a phase; Backlog / On Hold are their own "
+                      "columns."}
 
 
 def top_opps(items, today, n=5):
@@ -665,21 +892,23 @@ def _movement(cur_items, prev_items, today):
     return week_movement({p: r for p, r in prev_items}, {p: r for p, r in cur_items}, today)
 
 
-def region_digest(items, macro, today, prev_items=None, tasks_by_project=None):
+def region_digest(items, macro, today, prev_items=None, tasks_by_project=None, rl_items=None):
     reg = [(p, r) for p, r in items if r["macro"] == macro]
     total = len(reg)
     prev_reg = ([(p, r) for p, r in prev_items if r["macro"] == macro]
                 if prev_items is not None else None)
+    rl_reg = [(p, r) for p, r in (rl_items or []) if r["macro"] == macro]
     return {"region": macro, "opps": total,
             "funnel": pipeline(reg, today),
             "se_by_stage": se_by_stage(reg),
-            "se_by_phase": se_by_phase(reg, tasks_by_project or {}),
+            "se_by_phase": se_by_phase(rl_reg, tasks_by_project or {}),
             "top_opps": top_opps(reg, today),
             "hygiene_by_se": hygiene_by_owner(reg),
             "at_risk_overdue": overdue(reg, today),
             "no_stage": sum(1 for _, r in reg if not r["stage"]),
             "movement": _movement(reg, prev_reg, today),
-            "_coverage": covered("region opps", total, total, today)}
+            "_coverage": covered("region opps", total, total, today),
+            "caveat": SF_PIPELINE_CAVEAT}
 
 
 def half_windows(today, n=4):
@@ -696,17 +925,24 @@ def half_windows(today, n=4):
     return out
 
 
-def exec_digest(items, today, start=None, end=None, prev_items=None, tasks_by_project=None):
+def exec_digest(items, today, start=None, end=None, prev_items=None, tasks_by_project=None, rl_items=None):
     # Win-rate: a trend across recent halves (a single "current half" is near-empty
-    # early in a half — the VP wants the trajectory). Custom window if given.
+    # early in a half — the VP wants the trajectory). Custom window if given. Trend is
+    # capped to the CURRENT YEAR only — we don't report against last year, so a prior-year
+    # half must never sneak in (half_windows(today, 2) is exactly the current year's halves
+    # whether today falls in H1 or H2; the year filter is a defensive belt-and-suspenders,
+    # not strictly needed given n=2, but keeps this correct if n ever changes).
     if start and end:
         wr_trend = {"custom": winrate(items, start, end)}
     else:
-        wr_trend = {label: winrate(items, s, e) for label, s, e in half_windows(today, 4)}
+        current_year = today[:4]
+        wr_trend = {label: winrate(items, s, e) for label, s, e in half_windows(today, 2)
+                    if label.endswith(current_year)}
     return {"as_of": today,
             "data_quality_scorecard": scorecard(items, today),
             "org_winrate_trend": wr_trend,
             "movement": _movement(items, prev_items, today),
             "pipeline_region_stage": {reg: pipeline([(p, r) for p, r in items if r["macro"] == reg], today)
                                       for reg in sorted({r["macro"] for _, r in items})},
-            "se_by_phase": se_by_phase(items, tasks_by_project or {})}
+            "se_by_phase": se_by_phase(rl_items or [], tasks_by_project or {}),
+            "caveat": SF_PIPELINE_CAVEAT}

@@ -218,9 +218,9 @@
       S.push(cover({kicker:"SE Governance Review",parts:[{t:"Solution Engineering "},{t:"Governance",ac:true}],
         subtitle:"Portfolio health, win-rate and data confidence · Template SE",
         credit:{name:"Solution Engineering",role:"· as of "+String(prov.as_of||"").slice(0,10)}}));
-      S.push(agenda(["Open pipeline","Win-rate this half","Pipeline by region","Opportunities per SE by phase","Data confidence","Top losses","This week","Read & next steps"]));
+      S.push(agenda(["Open pipeline","Win-rate this half","Pipeline by region","Opportunities per SE by phase","Top losses","This week","Read & next steps"]));
       S.push(numSlide({kicker:"Open pipeline",hero:usd(totA),pink:true,heroLabel:totC+" open opportunities · Template SE",
-        caveat:"ACV is the reliable measure. GMV omitted — outliers inflate open pipeline to ~$17bn."}));
+        caveat:(d.caveat?d.caveat+" ":"")+"ACV is the reliable measure. GMV omitted — outliers inflate open pipeline to ~$17bn."}));
       if(lh)S.push(numSlide({kicker:"Win-rate · "+lh.label,hero:band(lh.w)||"—",heroLabel:lh.w.won+" won · "+lh.w.lost+" lost",
         viz:bandRows(d.org_winrate_trend||{}),
         caveat:"Band: strict counts only Won/Lost with a close date; sensitivity includes closed-without-date. Loss reason is 0% in Rocketlane — we cannot report \"why we lost\"."}));
@@ -232,11 +232,6 @@
       S.push(numSlide({title:"Opportunities per SE by phase",node:sePhaseTable(d.se_by_phase||{},{showRegions:true}),
         caveat:((d.se_by_phase&&d.se_by_phase.caveat)||"Phase is inferred from playbook task status, not a native Rocketlane field.")+
           " Org-wide, across every region — each SE tagged with the region(s) they have projects in. “Stale” = a later phase task done while an earlier one is still To do. “No activity” = nothing in the playbook has been touched."}));
-      S.push(numSlide({title:"Data confidence",
-        viz:meterRows([{lab:"Staged",frac:sc.pct_staged,txt:pct(sc.pct_staged),tick:0.9},
-          {lab:"Owner attributed",frac:1-(sc.pct_salesforce_owned||0),txt:pct(1-(sc.pct_salesforce_owned||0))},
-          {lab:"Region set",frac:1-(sc.pct_missing_region||0),txt:pct(1-(sc.pct_missing_region||0))}]),
-        caveat:"Base: "+(sc.total!=null?sc.total:"?")+" Template SE opps. The light tick is the target (90% staged). Fixing this lifts the confidence of every number above."}));
       if(lh&&lh.w.top_lost&&lh.w.top_lost.length){var i=inner();i.appendChild(kicker("Top losses · "+lh.label));i.appendChild(e("h2","slide-title","Losses by ACV"));
         var t=e("table");var hr=e("tr");["Opportunity","Region","Closed","ACV"].forEach(function(c,ix){hr.appendChild(e("th",ix===3?"num":null,c));});t.appendChild(hr);
         lh.w.top_lost.slice(0,5).forEach(function(o){var r=e("tr");r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.macro||"—"));r.appendChild(e("td",null,o.closed||"—"));r.appendChild(e("td","num",usd(o.acv)));t.appendChild(r);});
@@ -261,7 +256,7 @@
       var maxA=Math.max.apply(null,st.map(function(x){return x.c.acv||0}).concat([1]));
       S.push(numSlide({kicker:"Open pipeline",hero:usd(f.open_acv),pink:true,heroLabel:(f.open_count||0)+" open · "+(d.opps||0)+" total",chip:covChip(f._coverage),
         viz:funnelRows(st.map(function(x){return{lab:x.k,val:x.c.acv||0,valTxt:"<b>"+usd(x.c.acv)+"</b> · "+x.c.count};}),maxA),
-        caveat:(d.no_stage?("⚠ "+d.no_stage+" opps with no stage. "):"")+"ACV shown; GMV omitted (outliers). Region win-rate reported only for Brazil & EMEA-APAC (others n<5)."}));
+        caveat:(d.caveat?d.caveat+" ":"")+(d.no_stage?("⚠ "+d.no_stage+" opps with no stage. "):"")+"ACV shown; GMV omitted (outliers). Region win-rate reported only for Brazil & EMEA-APAC (others n<5)."}));
       S.push(numSlide({title:"Opportunities per SE by stage",node:matrixTable(d.se_by_stage||{}),
         caveat:"Volume by SE — not a performance ranking. “No stage” opps sit outside the funnel until classified."}));
       S.push(numSlide({title:"Opportunities per SE by phase",node:sePhaseTable(d.se_by_phase||{}),
