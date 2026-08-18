@@ -719,21 +719,31 @@ def _save_tasks_cache(cache: dict) -> None:
     _TASKS_CACHE_STORE.write_text(json.dumps(cache, indent=2))
 
 
-_SF_PIPELINE_PATH = Path(os.environ.get("SF_PIPELINE_PATH") or (
-    "/Users/stq/Library/CloudStorage/GoogleDrive-noe.eustaquio@vtex.com/"
-    "Unidades compartidas/Solution Engineering Global/SE Opps/"
-    "SE Co-pilot Governance Agent/Reports/SalesForce weekly/SF_pipeline.csv"
-))
+_SF_PIPELINE_PATH_RAW = os.environ.get("SF_PIPELINE_PATH")
+_SF_PIPELINE_PATH = Path(_SF_PIPELINE_PATH_RAW) if _SF_PIPELINE_PATH_RAW else None
+
+
+def _sf_pipeline_missing_error() -> str:
+    """No hardcoded fallback path on purpose — this MCP config is shared across every SE's
+    own Claude Desktop install, and a path baked in for one person's machine/Drive account
+    would silently break (or worse, silently point at the wrong file) for everyone else.
+    SF_PIPELINE_PATH must be set per-machine, e.g. in that install's MCP server env block."""
+    if _SF_PIPELINE_PATH is None:
+        return ("SF_PIPELINE_PATH environment variable is not set — point it at this "
+                 "machine's local Drive-synced weekly Salesforce export (set it in Claude "
+                 "Desktop's MCP server config env block, then restart Claude Desktop).")
+    return f"SF pipeline file not found at {_SF_PIPELINE_PATH} — check Drive sync"
 
 
 def _load_sf_pipeline():
-    """Read + parse the weekly SF export directly from its fixed Drive-synced path —
-    no caching, no separate ingest step: the file is small (~375 rows) so re-parsing on
-    every call is negligible cost and always reflects whatever Drive last synced. Returns
-    {"items", "report", "as_of"} (as_of = the file's own last-modified time, the real
-    freshness signal) or None if the path doesn't exist (Drive not synced on this
+    """Read + parse the weekly SF export directly from its Drive-synced path (see
+    SF_PIPELINE_PATH / _sf_pipeline_missing_error) — no caching, no separate ingest step:
+    the file is small (~375 rows) so re-parsing on every call is negligible cost and
+    always reflects whatever Drive last synced. Returns {"items", "report", "as_of"}
+    (as_of = the file's own last-modified time, the real freshness signal) or None if
+    SF_PIPELINE_PATH isn't set, or the path doesn't exist (Drive not synced on this
     machine, or the file was moved)."""
-    if not _SF_PIPELINE_PATH.is_file():
+    if _SF_PIPELINE_PATH is None or not _SF_PIPELINE_PATH.is_file():
         return None
     text = _SF_PIPELINE_PATH.read_text(encoding="utf-8-sig")
     items, report = _analyze.parse_sf_pipeline_csv(text)
@@ -744,17 +754,17 @@ def _load_sf_pipeline():
 
 @mcp.tool()
 def validate_sf_pipeline() -> dict[str, Any]:
-    """Quick read-only check of the current weekly Salesforce pipeline export (fixed
-    Drive-synced path — override with the SF_PIPELINE_PATH env var) — row count, any
-    owner name or country not yet in SF_NAME_MAP/SF_COUNTRY_TO_MACRO (analyze.py),
-    duplicate or missing Opportunity IDs, and the file's last-modified time. Does NOT
-    pull Rocketlane — use this for a fast sanity check right after the weekly file
-    refreshes, before running get_exec_digest/get_region_digest."""
+    """Quick read-only check of the current weekly Salesforce pipeline export (path set via
+    the required SF_PIPELINE_PATH env var — this machine's local Drive-synced file) — row
+    count, any owner name or country not yet in SF_NAME_MAP/SF_COUNTRY_TO_MACRO
+    (analyze.py), duplicate or missing Opportunity IDs, and the file's last-modified time.
+    Does NOT pull Rocketlane — use this for a fast sanity check right after the weekly
+    file refreshes, before running get_exec_digest/get_region_digest."""
     if _analyze is None:
         return {"error": "analyze module unavailable next to server.py"}
     sf = _load_sf_pipeline()
     if sf is None:
-        return {"error": f"SF pipeline file not found at {_SF_PIPELINE_PATH} — check Drive sync"}
+        return {"error": _sf_pipeline_missing_error()}
     return {"as_of": sf["as_of"], "source_file": str(_SF_PIPELINE_PATH), **sf["report"]}
 
 
@@ -869,7 +879,7 @@ def _sf_backed_digest(macro_filter: str | None):
     {"error": ...} dict."""
     sf = _load_sf_pipeline()
     if sf is None:
-        return {"error": f"SF pipeline file not found at {_SF_PIPELINE_PATH} — check Drive sync"}
+        return {"error": _sf_pipeline_missing_error()}
     sf_items = sf["items"]
     if macro_filter:
         sf_items = [(sfid, r) for sfid, r in sf_items if r["macro"] == macro_filter]
