@@ -19,11 +19,13 @@ enforced by the assistant per project instructions, not by this server.
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +176,25 @@ def _slack_lookup_user(email: str, token: str) -> dict[str, Any]:
         return {"error": True, "message": "lookup: " + body.get("error", "?")}
     except (urllib.error.URLError, KeyError, ValueError) as e:
         return {"error": True, "message": f"lookup failure: {e}"}
+
+
+def _slack_open_dm_channel(user_id: str, token: str) -> dict[str, Any]:
+    """Resolve the DM conversation id (a 'D...' channel) for a user id — needed for
+    files.completeUploadExternal's channel_id, which (unlike chat.postMessage's channel
+    param) does NOT auto-open a DM from a bare user id."""
+    data = urllib.parse.urlencode({"users": user_id}).encode()
+    req = urllib.request.Request(
+        "https://slack.com/api/conversations.open", data=data, method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Authorization": "Bearer " + token},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        if body.get("ok"):
+            return {"channel_id": body["channel"]["id"]}
+        return {"error": True, "message": "conversations.open: " + body.get("error", "?")}
+    except (urllib.error.URLError, KeyError, ValueError) as e:
+        return {"error": True, "message": f"conversations.open failure: {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -1079,6 +1100,94 @@ def post_slack_dm(recipient: str, text: str) -> dict[str, Any]:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         return {"ok": bool(body.get("ok")), "error": None if body.get("ok") else body.get("error")}
+    except urllib.error.URLError as e:
+        return {"error": True, "message": f"network failure: {e}"}
+
+
+@mcp.tool()
+def post_slack_file(recipient: str, filename: str, content: str, initial_comment: str = "") -> dict[str, Any]:
+    """
+    Upload a text file (e.g. a render_presentation HTML deck) and share it in a Slack
+    DM via the team's bot identity ("SE Co-Pilot Agent"). `recipient` is a Slack user id
+    (U...) or an email (resolved via users.lookupByEmail), same as post_slack_dm.
+    `content` is the raw file text (e.g. the `html` string render_presentation returns),
+    sent as UTF-8 bytes — not a local file path, this MCP has no access to the caller's
+    filesystem.
+
+    Use this instead of post_slack_dm + an Artifact link when the audience spans more
+    than one Claude org/account: an Artifact link is only viewable by accounts in the
+    org that published it, but a Slack file attachment is visible to everyone in the
+    Slack workspace regardless of their Claude account. The tradeoff is the recipient
+    has to download and open the file locally — Slack does not execute a self-contained
+    HTML deck's JS inline in the message thread — but that's what makes it independent
+    of Claude's own artifact hosting entirely.
+
+    Implements Slack's 3-step external upload flow (files.getUploadURLExternal -> upload
+    the bytes to the pre-signed URL -> files.completeUploadExternal), since there is no
+    single "attach a file" parameter on chat.postMessage. Requires SLACK_BOT_TOKEN (env
+    or credentials.json), same resolution as post_slack_dm — never logs the token.
+    """
+    token = _resolve_slack_token()
+    if not token:
+        return {"error": True, "message": "SLACK_BOT_TOKEN not found (env or credentials.json)"}
+
+    uid = recipient
+    if "@" in recipient:
+        r = _slack_lookup_user(recipient, token)
+        if r.get("error"):
+            return r
+        uid = r["user_id"]
+
+    dm = _slack_open_dm_channel(uid, token)
+    if dm.get("error"):
+        return dm
+    channel_id = dm["channel_id"]
+
+    body_bytes = content.encode("utf-8")
+
+    try:
+        # Step 1: get a pre-signed upload URL + file_id for this filename/size.
+        step1_data = urllib.parse.urlencode({"filename": filename, "length": len(body_bytes)}).encode()
+        step1_req = urllib.request.Request(
+            "https://slack.com/api/files.getUploadURLExternal", data=step1_data, method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded", "Authorization": "Bearer " + token},
+        )
+        with urllib.request.urlopen(step1_req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
+            step1_body = json.loads(resp.read().decode("utf-8"))
+        if not step1_body.get("ok"):
+            return {"error": True, "message": "getUploadURLExternal: " + step1_body.get("error", "?")}
+        upload_url, file_id = step1_body["upload_url"], step1_body["file_id"]
+
+        # Step 2: upload the bytes to that pre-signed URL — no auth header needed here,
+        # the URL itself is already scoped to this upload.
+        boundary = uuid.uuid4().hex
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        multipart = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8") + body_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        step2_req = urllib.request.Request(
+            upload_url, data=multipart, method="POST",
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        with urllib.request.urlopen(step2_req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
+            resp.read()  # Slack's upload endpoint replies 200 with a non-JSON body
+
+        # Step 3: finalize the upload and share it to the DM.
+        step3_payload: dict[str, Any] = {"files": [{"id": file_id, "title": filename}], "channel_id": channel_id}
+        if initial_comment:
+            step3_payload["initial_comment"] = initial_comment
+        step3_req = urllib.request.Request(
+            "https://slack.com/api/files.completeUploadExternal",
+            data=json.dumps(step3_payload).encode("utf-8"), method="POST",
+            headers={"Content-Type": "application/json; charset=utf-8", "Authorization": "Bearer " + token},
+        )
+        with urllib.request.urlopen(step3_req, timeout=TIMEOUT_S, context=_SSL_CONTEXT) as resp:
+            step3_body = json.loads(resp.read().decode("utf-8"))
+        if not step3_body.get("ok"):
+            return {"error": True, "message": "completeUploadExternal: " + step3_body.get("error", "?")}
+        return {"ok": True, "file_id": file_id, "files": step3_body.get("files")}
     except urllib.error.URLError as e:
         return {"error": True, "message": f"network failure: {e}"}
 
