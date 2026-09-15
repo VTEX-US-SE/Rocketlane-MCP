@@ -135,6 +135,11 @@ SF_COUNTRY_TO_MACRO = {
     "Europe": "EMEA-APAC", "Algeria": "EMEA-APAC", "Africa": "EMEA-APAC",
 }
 
+# Sort-direction glyphs Salesforce/Sheets can bake into a CSV header when that column is
+# actively sorted at export time (see parse_sf_pipeline_csv). Stripped from the END of
+# every header only — never from the middle, so a legitimate header can't be mangled.
+_HEADER_SORT_GLYPHS = "↑↓▲▼△▽"
+
 
 def _sf_amount(raw: str) -> float | None:
     raw = (raw or "").strip()
@@ -144,6 +149,41 @@ def _sf_amount(raw: str) -> float | None:
         return float(raw.replace(",", ""))
     except ValueError:
         return None
+
+
+def _sf_currency_amount(raw: str) -> tuple[str | None, float | None]:
+    """Parse a currency-prefixed SF field like 'BRL 782,098.20' -> ('BRL', 782098.20).
+    Falls back to (None, _sf_amount(raw)) when there's no recognizable 3-letter code
+    (e.g. the field is already a plain number, like ACV Preview (USD))."""
+    raw = (raw or "").strip()
+    if raw in ("", "-"):
+        return None, None
+    m = re.match(r"^([A-Z]{3})\s+([\d,]+\.?\d*)$", raw)
+    if m:
+        return m.group(1), _sf_amount(m.group(2))
+    return None, _sf_amount(raw)
+
+
+def _implied_amount_usd(amount_raw: str, acv_preview_raw: str, acv_usd: float | None) -> float | None:
+    """Amount has no pre-converted USD column in the export (unlike ACV Preview, which
+    ships both a native and a USD version). Estimate Amount's USD value using the SAME
+    row's own Amount -> ACV Preview implied FX rate (both fields share currency for a
+    given opportunity) rather than a fixed/guessed rate — validated live 2026-08-24
+    against Salesforce's own Kanban column total (which sums Amount, currency-converted):
+    reproduced it to within $1 on a 29-opportunity Commit & Signing sample ($9,379,351.75
+    vs Salesforce's $9,379,352). Returns None only when no rate can be derived AND the
+    currency isn't USD — never a silent guess."""
+    cur, amount_native = _sf_currency_amount(amount_raw)
+    if amount_native is None:
+        return None
+    _, acv_native = _sf_currency_amount(acv_preview_raw)
+    if acv_native and acv_usd:
+        rate = acv_native / acv_usd
+        if rate:
+            return amount_native / rate
+    if cur == "USD" or cur is None:
+        return amount_native
+    return None
 
 
 def _sf_date(raw: str) -> str:
@@ -162,7 +202,12 @@ def sf_row(rec: dict) -> dict:
     """Normalize one raw SF CSV record into project_row()'s exact shape, so every
     existing pure aggregation function (pipeline, scorecard, winrate, se_by_stage,
     hygiene_by_owner, overdue, top_opps/opp_health, dedupe, region_digest, exec_digest)
-    works unchanged. Unmapped owner names pass through as-is (never dropped)."""
+    works unchanged. The export now spans the whole VTEX universe (not just the SE
+    team), so any "Assigned SE" not in SF_NAME_MAP is rolled up into a single "Others"
+    owner — never dropped, never itemized by name, keeping se_by_stage/hygiene_by_se
+    scoped to the named SE roster plus one summary bucket for everyone else. The raw
+    name is still surfaced separately via parse_sf_pipeline_csv's unmapped_owners, for
+    validation visibility into who "Others" actually contains."""
     owner_raw = (rec.get("Assigned SE") or "").strip()
     stage = (rec.get("Stage") or "").strip()
     region = (rec.get("Sales Region") or "").strip()
@@ -172,12 +217,14 @@ def sf_row(rec: dict) -> dict:
     # (verified: it does not pandas-style suffix with ".1"), which happens to be the
     # 18-char id we want.
     sfid = (rec.get("Opportunity ID") or "").strip()
+    acv_usd = _sf_amount(rec.get("ACV Preview (USD)", ""))
     return {
         "name": (rec.get("Opportunity Name") or "").strip() or "(sin nombre)",
         "archived": False,
         "stage": stage,
         "closed": _sf_date(rec.get("Close Date", "")),
-        "acv": _sf_amount(rec.get("ACV Preview (USD)", "")),
+        "acv": acv_usd,
+        "amount_usd": _implied_amount_usd(rec.get("Amount", ""), rec.get("ACV Preview", ""), acv_usd),
         "gmv": None,
         "sfid": sfid,
         "loss": "" if lost_reason in ("", "-") else lost_reason,
@@ -186,7 +233,7 @@ def sf_row(rec: dict) -> dict:
         "macro": SF_COUNTRY_TO_MACRO.get(region, "(no region)"),
         "tpl": "", "tplname": "",
         "status": "Completed" if stage in ("Won", "Lost") else "",
-        "owner": SF_NAME_MAP.get(owner_raw, owner_raw),
+        "owner": SF_NAME_MAP.get(owner_raw, "Others") if owner_raw else "Others",
         "owner_email": "",
         "created_by": "",
         "team_emails": [],
@@ -207,6 +254,13 @@ def parse_sf_pipeline_csv(csv_text: str) -> tuple[list[tuple[str, dict]], dict]:
     swallowed): unmapped_owners, unmapped_regions, duplicate_sfids, rows_missing_id,
     total_rows."""
     reader = csv.DictReader(io.StringIO(csv_text))
+    # Salesforce/Sheets exports have twice baked a sort-direction glyph into whichever
+    # column header was actively sorted at export time (observed live 2026-08 and again
+    # 2026-09: "Stage" -> "Stage↑"), which silently broke every rec.get("Stage")
+    # lookup (empty string for every row). Strip trailing sort-indicator glyphs from
+    # every header so column lookups by name keep working regardless of which column
+    # happens to be sorted next time.
+    reader.fieldnames = [(fn or "").rstrip(_HEADER_SORT_GLYPHS) for fn in reader.fieldnames]
     items: list[tuple[str, dict]] = []
     unmapped_owners, unmapped_regions, seen_ids, dupes = set(), set(), set(), set()
     missing_id = 0
@@ -233,7 +287,25 @@ def parse_sf_pipeline_csv(csv_text: str) -> tuple[list[tuple[str, dict]], dict]:
 
 SF_PIPELINE_CAVEAT = ("Pipeline, stage, ACV, owner and region come from the weekly "
                        "Salesforce export, not Rocketlane's synced fields — Rocketlane "
-                       "is used only for se_by_phase.")
+                       "is used only for se_by_phase. The export spans the whole VTEX "
+                       "universe; owners outside the named SE roster are grouped under "
+                       "\"Others\".")
+
+AMOUNT_METRIC_CAVEAT = ("Pipeline shown here uses \"Amount\" (total contract value), not "
+                         "\"ACV Preview\" (annualized value) — the two are different "
+                         "metrics by design, not a data error; expect Amount to run "
+                         "higher for any multi-year deal.")
+
+
+def with_amount_as_acv(items: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+    """Return a NEW items list where each row's 'acv' is replaced by its 'amount_usd' —
+    lets every existing ACV-driven function (pipeline, scorecard, se_by_stage, winrate,
+    hygiene_by_owner, top_opps, region_digest, exec_digest, ...) run completely unchanged
+    against "Amount" instead of "ACV Preview (USD)", with zero duplicated logic. Purely
+    additive/non-destructive: copies each row dict, never mutates the original list or
+    its dicts. A row with no resolvable amount_usd gets acv=None — the same "missing
+    data" convention every consumer already handles for a missing ACV."""
+    return [(k, {**r, "acv": r.get("amount_usd")}) for k, r in items]
 
 
 def orphan_rocketlane_projects(rl_items: list[tuple[str, dict]], sf_sfids: set) -> list[dict]:
@@ -942,6 +1014,7 @@ def exec_digest(items, today, start=None, end=None, prev_items=None, tasks_by_pr
             "data_quality_scorecard": scorecard(items, today),
             "org_winrate_trend": wr_trend,
             "movement": _movement(items, prev_items, today),
+            "pipeline_overall": pipeline(items, today),
             "pipeline_region_stage": {reg: pipeline([(p, r) for p, r in items if r["macro"] == reg], today)
                                       for reg in sorted({r["macro"] for _, r in items})},
             "se_by_phase": se_by_phase(rl_items or [], tasks_by_project or {}),

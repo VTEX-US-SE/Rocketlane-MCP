@@ -60,6 +60,12 @@ DUPLICATE_ROW = ('Diego cione,Won,Duplicate of RedSea,EMEA/APAC Sales Leader,Red
                   '01/03/2026,01/03/2026,1,Middle East and Africa,-,-,'
                   '006U600000ZFcGz,006U600000ZFcGzIAL')
 
+# Amount = 3x ACV Preview in native currency (BRL) -> a 3-year deal. Implied FX rate:
+# 100,000 BRL / 20,000 USD = 5 BRL/USD -> Amount 300,000 BRL should convert to 60,000 USD.
+MULTIYEAR = ('Diego cione,Proposal,Multi-year BR Deal,Brazil Leader,Some Account 4,Q3-2026,'
+             '"BRL 300,000.00",50%,1,01/01/2026,New Client,Commit,"BRL 100,000.00","20,000.00",'
+             '01/03/2026,01/03/2026,1,Brazil,-,-,006TESTMULTIYR1,006TESTMULTIYR1IAA')
+
 FULL_CSV = "\n".join([HEADER, REDSEA, ETHARA, RUBIS, RIVERO, UNMAPPED_OWNER,
                        UNMAPPED_COUNTRY, BLANK_ROW, DUPLICATE_ROW]) + "\n"
 
@@ -116,11 +122,22 @@ def test_carlos_rivero_maps_to_carlos_celis():
     assert r["owner"] == "Carlos Celis", r
 
 
-def test_unmapped_owner_passes_through_and_is_reported():
+def test_unmapped_owner_bucketed_as_others_and_is_reported():
+    """The export now spans the whole VTEX universe, not just the SE team — anyone not
+    in SF_NAME_MAP is rolled into a single "Others" owner (never dropped, never
+    itemized), while the raw name is still surfaced via unmapped_owners for visibility
+    into who "Others" actually contains."""
     items, report = analyze.parse_sf_pipeline_csv(HEADER + "\n" + UNMAPPED_OWNER + "\n")
     r = _find(items, "006TESTUNMAP01A")
-    assert r["owner"] == "New Hire Test", r  # passed through, not dropped
+    assert r["owner"] == "Others", r
     assert "New Hire Test" in report["unmapped_owners"], report
+
+
+def test_blank_owner_bucketed_as_others():
+    row = UNMAPPED_OWNER.replace("New Hire Test", "", 1)
+    items, _ = analyze.parse_sf_pipeline_csv(HEADER + "\n" + row + "\n")
+    r = _find(items, "006TESTUNMAP01A")
+    assert r["owner"] == "Others", r
 
 
 def test_unmapped_country_falls_back_to_no_region_and_is_reported():
@@ -185,6 +202,53 @@ def test_orphan_rocketlane_projects_flags_unmatched_sfid():
     assert "Rubis Energy Kenya" in names, orphans
     assert "RedSea Global Saudi B2B Marketplace" not in names, orphans
     assert orphans[0]["acv"] == 20000000, orphans  # sorted by ACV desc
+
+
+def test_amount_usd_same_currency_no_conversion_needed():
+    """REDSEA: Amount and ACV Preview are both already USD -> implied rate is exactly
+    1.0, so amount_usd should equal the raw Amount number unchanged."""
+    items, _ = analyze.parse_sf_pipeline_csv(HEADER + "\n" + REDSEA + "\n")
+    r = _find(items, "006U600000ZFcGz")
+    assert r["amount_usd"] == 485000.00, r
+
+
+def test_amount_usd_foreign_currency_matches_acv_when_amount_equals_acv_preview():
+    """RIVERO: Amount == ACV Preview in native EUR -> amount_usd must equal acv (both
+    converted through the same implied rate), i.e. a 1-year deal where Amount and ACV
+    coincide."""
+    items, _ = analyze.parse_sf_pipeline_csv(HEADER + "\n" + RIVERO + "\n")
+    r = _find(items, "006TESTRIVER01A")
+    assert r["amount_usd"] == r["acv"] == 11000.00, r
+
+
+def test_amount_usd_multiyear_deal_converts_via_implied_rate():
+    """MULTIYEAR: Amount is 3x ACV Preview in native BRL -> amount_usd should be 3x the
+    USD ACV too (60,000 vs 20,000), proving the implied per-row FX rate — not a fixed/
+    guessed rate — drives the conversion."""
+    items, _ = analyze.parse_sf_pipeline_csv(HEADER + "\n" + MULTIYEAR + "\n")
+    r = _find(items, "006TESTMULTIYR1")
+    assert r["acv"] == 20000.00, r
+    assert abs(r["amount_usd"] - 60000.00) < 0.01, r
+
+
+def test_amount_usd_none_when_amount_blank():
+    items, _ = analyze.parse_sf_pipeline_csv(HEADER + "\n" + BLANK_ROW + "\n")
+    r = _find(items, "006TESTBLANK01A")
+    assert r["amount_usd"] is None, r
+
+
+def test_with_amount_as_acv_swaps_without_mutating_original():
+    items, _ = analyze.parse_sf_pipeline_csv(HEADER + "\n" + REDSEA + "\n" + MULTIYEAR + "\n")
+    swapped = analyze.with_amount_as_acv(items)
+    orig_redsea = _find(items, "006U600000ZFcGz")
+    swapped_redsea = _find(swapped, "006U600000ZFcGz")
+    assert orig_redsea["acv"] == 431666.67, orig_redsea  # original untouched
+    assert swapped_redsea["acv"] == 485000.00, swapped_redsea  # swapped uses amount_usd
+    swapped_multiyear = _find(swapped, "006TESTMULTIYR1")
+    assert abs(swapped_multiyear["acv"] - 60000.00) < 0.01, swapped_multiyear
+    # reused functions work unchanged against the swapped items
+    p = analyze.pipeline(swapped, "2026-08-17")
+    assert p["open_acv"] > 0
 
 
 ALL_TESTS = [v for k, v in list(globals().items()) if k.startswith("test_")]

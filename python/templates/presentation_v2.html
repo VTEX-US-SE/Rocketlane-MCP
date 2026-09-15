@@ -218,7 +218,7 @@
       S.push(cover({kicker:"SE Governance Review",parts:[{t:"Solution Engineering "},{t:"Governance",ac:true}],
         subtitle:"Portfolio health, win-rate and data confidence · Template SE",
         credit:{name:"Solution Engineering",role:"· as of "+String(prov.as_of||"").slice(0,10)}}));
-      S.push(agenda(["Open pipeline","Win-rate this half","Pipeline by region","Opportunities per SE by phase","Top losses","This week","Read & next steps"]));
+      S.push(agenda(["Open pipeline","Win-rate this half","Pipeline by region","Pipeline by stage","Opportunities per SE by phase","Top losses","This week","Read & next steps"]));
       S.push(numSlide({kicker:"Open pipeline",hero:usd(totA),pink:true,heroLabel:totC+" open opportunities · Template SE",
         caveat:(d.caveat?d.caveat+" ":"")+"ACV is the reliable measure. GMV omitted — outliers inflate open pipeline to ~$17bn."}));
       if(lh)S.push(numSlide({kicker:"Win-rate · "+lh.label,hero:band(lh.w)||"—",heroLabel:lh.w.won+" won · "+lh.w.lost+" lost",
@@ -229,6 +229,12 @@
       S.push(numSlide({title:"Open pipeline by region",
         viz:funnelRows(regs.map(function(x){return{lab:x.r,val:x.o.open_acv||0,valTxt:"<b>"+usd(x.o.open_acv)+"</b> · "+x.o.open_count+" · cov "+pct(x.o._coverage&&x.o._coverage.coverage)};}),maxA),
         caveat:"Open ACV by region. Coverage = % of the region's opps with a classifiable stage."}));
+      var bsAll=(d.pipeline_overall&&d.pipeline_overall.by_stage)||{};
+      var stAll=Object.keys(bsAll).map(function(k){return{k:k,c:bsAll[k]};}).sort(function(a,b){return (b.c.acv||0)-(a.c.acv||0);});
+      var maxAS=Math.max.apply(null,stAll.map(function(x){return x.c.acv||0}).concat([1]));
+      S.push(numSlide({title:"Open pipeline by stage",
+        viz:funnelRows(stAll.map(function(x){return{lab:x.k,val:x.c.acv||0,valTxt:"<b>"+usd(x.c.acv)+"</b> · "+x.c.count};}),maxAS),
+        caveat:"Open ACV by stage, org-wide. ACV is the reliable measure; GMV omitted (outliers)."}));
       S.push(numSlide({title:"Opportunities per SE by phase",node:sePhaseTable(d.se_by_phase||{},{showRegions:true}),
         caveat:((d.se_by_phase&&d.se_by_phase.caveat)||"Phase is inferred from playbook task status, not a native Rocketlane field.")+
           " Org-wide, across every region — each SE tagged with the region(s) they have projects in. “Stale” = a later phase task done while an earlier one is still To do. “No activity” = nothing in the playbook has been touched."}));
