@@ -142,7 +142,7 @@
     function pct(x){return x==null?"—":Math.round(x*100)+"%";}
     function covChip(c){if(!c)return null;var t=(c.n!=null?c.n:"?")+"/"+(c.of!=null?c.of:"?")+" · "+pct(c.coverage);
       var ch=e("span","chip",t);if(c.coverage!=null&&c.coverage<0.7)ch.className="chip warn";return ch;}
-    function band(w){if(!w||(w.won+w.lost)===0)return null;return Math.round(w.strict*100)+"–"+Math.round(w.sensitivity*100)+"%";}
+    function band(w){if(!w||(w.won+w.lost)===0)return null;var a=Math.round(w.strict*100),b=Math.round(w.sensitivity*100);return a===b?a+"%":a+"–"+b+"%";}
     function latestHalf(tr){var ks=Object.keys(tr||{});for(var i=0;i<ks.length;i++){var w=tr[ks[i]];if(w&&(w.won+w.lost)>0)return{label:ks[i],w:w};}return ks.length?{label:ks[0],w:tr[ks[0]]}:null;}
 
     function funnelRows(items,maxV){var v=e("div","viz");items.forEach(function(x){var r=e("div","row");r.appendChild(e("div","lab",x.lab));
@@ -207,13 +207,15 @@
       var ul=e("ul","take");(cfg.takeaways||[]).forEach(function(t){var li=e("li");li.appendChild(e("span","k","→"));li.appendChild(e("span",null,t));ul.appendChild(li);});i.appendChild(ul);
       if(cfg.next&&cfg.next.length){i.appendChild(e("div","hero-label","Next steps"));var cl=e("ul","checklist");cfg.next.forEach(function(t){cl.appendChild(e("li","","☐ "+t));});i.appendChild(cl);}
       if(cfg.footHTML){var f=e("div","foot");f.innerHTML=cfg.footHTML;i.appendChild(f);}return slide("close",i);}
-    function provFoot(prov,P){return "Source: "+(prov.source||"Rocketlane (api-key)")+" · universe "+(prov.universe!=null?prov.universe:"?")+
-      " · Template SE (520608)<br>as_of "+(prov.as_of||"?")+" · template "+(P.template_version||"?")+" · generated "+(P.generated_ts||"?")+" · ✓ integrity verified (checksum)"+
+    function provFoot(prov,P){return "Source: "+(prov.source||"Rocketlane (api-key)")+(prov.universe!=null?(" · universe "+prov.universe):"")+
+      " · Template SE (520608)<br>as_of "+(prov.as_of||"?")+(prov.sf_pipeline_as_of?(" · Salesforce export as of "+String(prov.sf_pipeline_as_of).slice(0,10)):"")+
+      " · template "+(P.template_version||"?")+" · generated "+(P.generated_ts||"?")+" · ✓ integrity verified (checksum)"+
       (prov.task_fetch_failures?(" · ⚠ "+prov.task_fetch_failures+" project(s) task fetch failed — excluded from SE×Phase this run"):"");}
 
     // ============ EXEC ============
     function execSlides(P){var d=P.digest,prov=P.prov||{},S=[];
       var sc=(d.data_quality_scorecard&&d.data_quality_scorecard.overall)||{};var lh=latestHalf(d.org_winrate_trend);
+      var lf=lh&&lh.w.loss_reason_fill,lrNote=(lf&&lf.of_lost&&lf.backlog/lf.of_lost<0.9)?(" Loss reason is populated on only "+pct(lf.backlog/lf.of_lost)+" of lost opportunities."):"";
       var prs=d.pipeline_region_stage||{};var totA=0,totC=0;Object.keys(prs).forEach(function(r){totA+=prs[r].open_acv||0;totC+=prs[r].open_count||0;});
       S.push(cover({kicker:"SE Governance Review",parts:[{t:"Solution Engineering "},{t:"Governance",ac:true}],
         subtitle:"Portfolio health, win-rate and data confidence · Template SE",
@@ -223,7 +225,7 @@
         caveat:(d.caveat?d.caveat+" ":"")+"ACV is the reliable measure. GMV omitted — outliers inflate open pipeline to ~$17bn."}));
       if(lh)S.push(numSlide({kicker:"Win-rate · "+lh.label,hero:band(lh.w)||"—",heroLabel:lh.w.won+" won · "+lh.w.lost+" lost",
         viz:bandRows(d.org_winrate_trend||{}),
-        caveat:"Band: strict counts only Won/Lost with a close date; sensitivity includes closed-without-date. Loss reason is 0% in Rocketlane — we cannot report \"why we lost\"."}));
+        caveat:"Band: strict counts only Won/Lost with a close date; sensitivity includes closed-without-date."+lrNote}));
       var regs=Object.keys(prs).map(function(r){return{r:r,o:prs[r]};}).filter(function(x){return x.o.open_count;}).sort(function(a,b){return (b.o.open_acv||0)-(a.o.open_acv||0);});
       var maxA=Math.max.apply(null,regs.map(function(x){return x.o.open_acv||0}).concat([1]));
       S.push(numSlide({title:"Open pipeline by region",
@@ -241,14 +243,24 @@
       if(lh&&lh.w.top_lost&&lh.w.top_lost.length){var i=inner();i.appendChild(kicker("Top losses · "+lh.label));i.appendChild(e("h2","slide-title","Losses by ACV"));
         var t=e("table");var hr=e("tr");["Opportunity","Region","Closed","ACV"].forEach(function(c,ix){hr.appendChild(e("th",ix===3?"num":null,c));});t.appendChild(hr);
         lh.w.top_lost.slice(0,5).forEach(function(o){var r=e("tr");r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.macro||"—"));r.appendChild(e("td",null,o.closed||"—"));r.appendChild(e("td","num",usd(o.acv)));t.appendChild(r);});
-        i.appendChild(t);i.appendChild(e("div","caveat","No loss reason in Rocketlane — prioritize populating Closed Lost Reason from Salesforce."));S.push(slide("data",i));}
+        i.appendChild(t);i.appendChild(e("div","caveat","Top 5 Lost opportunities by ACV in "+lh.label+"."+lrNote));S.push(slide("data",i));}
       S.push(numSlide({title:"This week — highlights & lowlights",node:movementBlock(d.movement),
         caveat:(d.movement&&d.movement.since?("Since "+String(d.movement.since).slice(0,10)+" · "):"")+"Org-wide, week-over-week from the snapshot diff."}));
-      var unstaged=Math.round((sc.total||0)*(1-(sc.pct_staged||0)));var sfown=Math.round((sc.total||0)*(sc.pct_salesforce_owned||0));
-      S.push(closing({takeaways:[(lh?("Win-rate "+lh.label+": "+band(lh.w)+" ("+lh.w.won+"W/"+lh.w.lost+"L)"):"Win-rate: —"),
-        usd(totA)+" in open pipeline ("+totC+" opps)",pct(sc.pct_staged)+" of opps have a stage — below the 90% target"],
-        next:["Raise stage coverage: ~"+unstaged+" opps unclassified","Reassign ~"+sfown+" opps owned by \"Salesforce\" to human SEs","Populate Closed Lost Reason (SF→RL) — 0% today — for loss analysis"],
-        footHTML:provFoot(prov,P)}));
+      var unstaged=sc.pct_staged!=null?Math.round((sc.total||0)*(1-sc.pct_staged)):0;
+      var sfown=sc.pct_salesforce_owned!=null?Math.round((sc.total||0)*sc.pct_salesforce_owned):0;
+      var sp=d.se_by_phase||{},spCols=sp.columns||[],spRows=sp.rows||[],held=0,active=0,stale=0,idle=0;
+      spRows.forEach(function(r){spCols.forEach(function(c){var v=(r.counts&&r.counts[c])||0;if(c==="Backlog"||c==="On Hold")held+=v;else active+=v;});
+        stale+=r.stale_count||0;idle+=r.no_task_activity_count||0;});
+      var orph=(d.orphan_rocketlane_projects&&d.orphan_rocketlane_projects.count)||0;
+      var tk=[(lh?("Win-rate "+lh.label+": "+band(lh.w)+" ("+lh.w.won+"W/"+lh.w.lost+"L)"):"Win-rate: —"),usd(totA)+" in open pipeline ("+totC+" opps)"];
+      if(spRows.length)tk.push(active+" SE projects in an active phase · "+held+" on hold or backlog (Rocketlane)");
+      if(sc.pct_staged!=null&&sc.pct_staged<0.9)tk.push(pct(sc.pct_staged)+" of opps have a stage — below the 90% target");
+      var nx=[];
+      if(unstaged>0)nx.push("Raise stage coverage: ~"+unstaged+" opps unclassified");
+      if(sfown>0)nx.push("Reassign ~"+sfown+" opps owned by \"Salesforce\" to human SEs");
+      if(orph>0)nx.push("Reconcile "+orph+" Rocketlane project(s) with no matching Salesforce opportunity");
+      if(stale||idle)nx.push("Review "+stale+" stale and "+idle+" no-activity playbook(s) flagged in the SE × Phase table");
+      S.push(closing({takeaways:tk,next:nx,footHTML:provFoot(prov,P)}));
       return S;}
 
     // ============ REGION ============
