@@ -143,7 +143,16 @@
     function covChip(c){if(!c)return null;var t=(c.n!=null?c.n:"?")+"/"+(c.of!=null?c.of:"?")+" · "+pct(c.coverage);
       var ch=e("span","chip",t);if(c.coverage!=null&&c.coverage<0.7)ch.className="chip warn";return ch;}
     function band(w){if(!w||(w.won+w.lost)===0)return null;var a=Math.round(w.strict*100),b=Math.round(w.sensitivity*100);return a===b?a+"%":a+"–"+b+"%";}
-    function latestHalf(tr){var ks=Object.keys(tr||{});for(var i=0;i<ks.length;i++){var w=tr[ks[i]];if(w&&(w.won+w.lost)>0)return{label:ks[i],w:w};}return ks.length?{label:ks[0],w:tr[ks[0]]}:null;}
+    // Half shown in the hero: the NEWEST half with >=5 decided deals (the deck's n<5 convention),
+    // else the newest with any — so it follows the time of year (H1 until Jun, H2 after, falling
+    // back to H1 in the first days of H2). Ranked by label, NOT key order: the embedded JSON sorts
+    // keys alphabetically, which made "first key" always H1.
+    function latestHalf(tr){tr=tr||{};var ks=Object.keys(tr);
+      function n(k){var w=tr[k];return w?(w.won||0)+(w.lost||0):0;}
+      function rank(k){var m=/^H([12]) (\d{4})$/.exec(k);return m?(+m[2])*10+(+m[1]):-1;}
+      ks.sort(function(a,b){return rank(b)-rank(a);});
+      function pick(min){for(var i=0;i<ks.length;i++){if(n(ks[i])>=min)return ks[i];}return null;}
+      var k=pick(5)||pick(1)||ks[0];return k?{label:k,w:tr[k]}:null;}
 
     function funnelRows(items,maxV){var v=e("div","viz");items.forEach(function(x){var r=e("div","row");r.appendChild(e("div","lab",x.lab));
       var tr=e("div","track");var f=e("div","fill");f.style.left="0";f.style.width=Math.max(2,Math.round((x.val/(maxV||1))*100))+"%";tr.appendChild(f);r.appendChild(tr);
@@ -151,18 +160,7 @@
     function bandRows(trend){var v=e("div","viz");Object.keys(trend).forEach(function(k){var w=trend[k];var r=e("div","row");r.appendChild(e("div","lab",k));
       var tr=e("div","track");if((w.won+w.lost)>0){var seg=e("div","seg");var s=w.strict*100,en=w.sensitivity*100;seg.style.left=s+"%";seg.style.width=Math.max(3,en-s)+"%";tr.appendChild(seg);}r.appendChild(tr);
       var val=e("div","val");val.innerHTML=(w.won+w.lost)>0?("<b>"+band(w)+"</b> · "+w.won+"W/"+w.lost+"L"):"n<5 — not reported";r.appendChild(val);v.appendChild(r);});return v;}
-    function meterRows(items){var v=e("div","viz");items.forEach(function(x){var r=e("div","row");r.appendChild(e("div","lab",x.lab));
-      var tr=e("div","track");var f=e("div","fill");f.style.left="0";f.style.width=Math.max(2,Math.round((x.frac||0)*100))+"%";f.style.background=(x.frac!=null&&x.frac<0.7)?"var(--amber)":"var(--green)";tr.appendChild(f);
-      if(x.tick!=null){var tk=e("div","tick");tk.style.left=(x.tick*100)+"%";tr.appendChild(tk);}r.appendChild(tr);var val=e("div","val",x.txt);r.appendChild(val);v.appendChild(r);});return v;}
 
-    function moveSentence(ev){var a=ev.acv?(" ("+usd(ev.acv)+")"):"";
-      if(ev.kind==="won")return ev.opp+" closed Won"+a;
-      if(ev.kind==="advance")return ev.opp+" advanced "+ev.from+" → "+ev.to+a;
-      if(ev.kind==="new")return "New opportunity "+ev.opp+a;
-      if(ev.kind==="lost")return ev.opp+" marked Lost"+a;
-      if(ev.kind==="slipped")return ev.opp+" slipped past its close date"+a;
-      if(ev.kind==="regress")return ev.opp+" slipped "+ev.from+" → "+ev.to+a;
-      return ev.opp;}
     function matrixTable(m){var t=e("table","matrix");var hr=e("tr");hr.appendChild(e("th",null,"SE"));
       (m.columns||[]).forEach(function(c){hr.appendChild(e("th","num",c==="(no stage)"?"No stage":c));});hr.appendChild(e("th","num","Total"));t.appendChild(hr);
       (m.rows||[]).forEach(function(r){var tr=e("tr");tr.appendChild(e("td",null,r.owner));
@@ -177,19 +175,9 @@
     function pill(sev,n){var p=e("span","pill "+sev);p.appendChild(e("span","dot "+sev));p.appendChild(document.createTextNode(" "+n));return p;}
     function top5Block(to){var w=e("div");var sm=e("div","status-strip");
       sm.appendChild(pill("red",(to.summary&&to.summary.red)||0));sm.appendChild(pill("yellow",(to.summary&&to.summary.yellow)||0));sm.appendChild(pill("green",(to.summary&&to.summary.green)||0));w.appendChild(sm);
-      var t=e("table");var hr=e("tr");["","Opportunity","Stage","Owner","ACV"].forEach(function(c,ix){hr.appendChild(e("th",ix===4?"num":null,c));});t.appendChild(hr);
+      var t=e("table");var hr=e("tr");["","Opportunity","Stage","Close date","ACV"].forEach(function(c,ix){hr.appendChild(e("th",ix===4?"num":null,c));});t.appendChild(hr);
       (to.top||[]).forEach(function(o){var r=e("tr");var td0=e("td");td0.appendChild(e("span","dot "+(o.severity||"green")));r.appendChild(td0);
-        r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.stage||"—"));r.appendChild(e("td",null,o.owner||"—"));r.appendChild(e("td","num",usd(o.acv)));t.appendChild(r);});w.appendChild(t);return w;}
-    function movementBlock(mv){var w=e("div");
-      if(!mv||mv.status!=="ok"){w.appendChild(e("div","caveat","Highlights & lowlights start once a week of history has accrued (a prior snapshot is needed)."));return w;}
-      var cols=e("div","move-cols");
-      var hi=e("div","move-col");hi.appendChild(e("div","move-h up","▲ Highlights"));
-      if((mv.highlights||[]).length)mv.highlights.forEach(function(ev){hi.appendChild(e("div","move-item",moveSentence(ev)));});
-      else hi.appendChild(e("div","move-item muted","No notable wins this week"));
-      var lo=e("div","move-col");lo.appendChild(e("div","move-h down","▼ Lowlights"));
-      if((mv.lowlights||[]).length)mv.lowlights.forEach(function(ev){lo.appendChild(e("div","move-item",moveSentence(ev)));});
-      else lo.appendChild(e("div","move-item muted","No notable setbacks this week"));
-      cols.appendChild(hi);cols.appendChild(lo);w.appendChild(cols);return w;}
+        r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.stage||"—"));r.appendChild(e("td",null,o.closed_forecast||"—"));r.appendChild(e("td","num",usd(o.acv)));t.appendChild(r);});w.appendChild(t);return w;}
     function inner(){return e("div","inner");}
     function slide(cls,node){var s=e("section","slide "+cls);s.appendChild(node);return s;}
     function kicker(t){return e("p","kicker",t);}
@@ -208,35 +196,35 @@
       if(cfg.next&&cfg.next.length){i.appendChild(e("div","hero-label","Next steps"));var cl=e("ul","checklist");cfg.next.forEach(function(t){cl.appendChild(e("li","","☐ "+t));});i.appendChild(cl);}
       if(cfg.footHTML){var f=e("div","foot");f.innerHTML=cfg.footHTML;i.appendChild(f);}return slide("close",i);}
     function provFoot(prov,P){return "Source: "+(prov.source||"Rocketlane (api-key)")+(prov.universe!=null?(" · universe "+prov.universe):"")+
-      " · Template SE (520608)<br>as_of "+(prov.as_of||"?")+(prov.sf_pipeline_as_of?(" · Salesforce export as of "+String(prov.sf_pipeline_as_of).slice(0,10)):"")+
+      " · Template SE (520608)<br>as_of "+(prov.as_of||"?")+(prov.data_as_of?(" · Salesforce data as of "+String(prov.data_as_of).slice(0,10)):"")+
       " · template "+(P.template_version||"?")+" · generated "+(P.generated_ts||"?")+" · ✓ integrity verified (checksum)"+
       (prov.task_fetch_failures?(" · ⚠ "+prov.task_fetch_failures+" project(s) task fetch failed — excluded from SE×Phase this run"):"");}
 
     // ============ EXEC ============
     function execSlides(P){var d=P.digest,prov=P.prov||{},S=[];
-      var sc=(d.data_quality_scorecard&&d.data_quality_scorecard.overall)||{};var lh=latestHalf(d.org_winrate_trend);
+      var lh=latestHalf(d.org_winrate_trend);
       var lf=lh&&lh.w.loss_reason_fill,lrNote=(lf&&lf.of_lost&&lf.backlog/lf.of_lost<0.9)?(" Loss reason is populated on only "+pct(lf.backlog/lf.of_lost)+" of lost opportunities."):"";
       var prs=d.pipeline_region_stage||{};var totA=0,totC=0;Object.keys(prs).forEach(function(r){totA+=prs[r].open_acv||0;totC+=prs[r].open_count||0;});
       S.push(cover({kicker:"SE Governance Review",parts:[{t:"Solution Engineering "},{t:"Governance",ac:true}],
         subtitle:"Portfolio health, win-rate and data confidence · Template SE",
         credit:{name:"Solution Engineering",role:"· as of "+String(prov.as_of||"").slice(0,10)}}));
-      S.push(agenda(["Open pipeline","Win-rate this half","Pipeline by region","Pipeline by stage","Opportunities per SE by phase","Top losses","This week","Read & next steps"]));
+      S.push(agenda(["Open pipeline",lh?"Win-rate · "+lh.label:"Win-rate","Pipeline by region","Pipeline by stage","Opportunities per SE by phase","Top losses","Read & next steps"]));
       S.push(numSlide({kicker:"Open pipeline",hero:usd(totA),pink:true,heroLabel:totC+" open opportunities · Template SE",
-        caveat:(d.caveat?d.caveat+" ":"")+"ACV is the reliable measure. GMV omitted — outliers inflate open pipeline to ~$17bn."}));
+        caveat:d.caveat||""}));
       if(lh)S.push(numSlide({kicker:"Win-rate · "+lh.label,hero:band(lh.w)||"—",heroLabel:lh.w.won+" won · "+lh.w.lost+" lost",
         viz:bandRows(d.org_winrate_trend||{}),
-        caveat:"Band: strict counts only Won/Lost with a close date; sensitivity includes closed-without-date."+lrNote}));
+        caveat:"Win rate by count = Won ÷ (Won + Lost), by close date within each half."+lrNote}));
       var regs=Object.keys(prs).map(function(r){return{r:r,o:prs[r]};}).filter(function(x){return x.o.open_count;}).sort(function(a,b){return (b.o.open_acv||0)-(a.o.open_acv||0);});
       var maxA=Math.max.apply(null,regs.map(function(x){return x.o.open_acv||0}).concat([1]));
       S.push(numSlide({title:"Open pipeline by region",
         viz:funnelRows(regs.map(function(x){return{lab:x.r,val:x.o.open_acv||0,valTxt:"<b>"+usd(x.o.open_acv)+"</b> · "+x.o.open_count+" · cov "+pct(x.o._coverage&&x.o._coverage.coverage)};}),maxA),
-        caveat:"Open ACV by region. Coverage = % of the region's opps with a classifiable stage."}));
+        caveat:"Open ACV by region. Coverage = share of those opportunities with an ACV value."}));
       var bsAll=(d.pipeline_overall&&d.pipeline_overall.by_stage)||{};
       var stAll=Object.keys(bsAll).map(function(k){return{k:k,c:bsAll[k]};}).sort(function(a,b){return (b.c.acv||0)-(a.c.acv||0);});
       var maxAS=Math.max.apply(null,stAll.map(function(x){return x.c.acv||0}).concat([1]));
       S.push(numSlide({title:"Open pipeline by stage",
         viz:funnelRows(stAll.map(function(x){return{lab:x.k,val:x.c.acv||0,valTxt:"<b>"+usd(x.c.acv)+"</b> · "+x.c.count};}),maxAS),
-        caveat:"Open ACV by stage, org-wide. ACV is the reliable measure; GMV omitted (outliers)."}));
+        caveat:"Open ACV by stage, org-wide (ACV Preview, USD)."}));
       S.push(numSlide({title:"Opportunities per SE by phase",node:sePhaseTable(d.se_by_phase||{},{showRegions:true}),
         caveat:((d.se_by_phase&&d.se_by_phase.caveat)||"Phase is inferred from playbook task status, not a native Rocketlane field.")+
           " Org-wide, across every region — each SE tagged with the region(s) they have projects in. “Stale” = a later phase task done while an earlier one is still To do. “No activity” = nothing in the playbook has been touched."}));
@@ -244,21 +232,12 @@
         var t=e("table");var hr=e("tr");["Opportunity","Region","Closed","ACV"].forEach(function(c,ix){hr.appendChild(e("th",ix===3?"num":null,c));});t.appendChild(hr);
         lh.w.top_lost.slice(0,5).forEach(function(o){var r=e("tr");r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.macro||"—"));r.appendChild(e("td",null,o.closed||"—"));r.appendChild(e("td","num",usd(o.acv)));t.appendChild(r);});
         i.appendChild(t);i.appendChild(e("div","caveat","Top 5 Lost opportunities by ACV in "+lh.label+"."+lrNote));S.push(slide("data",i));}
-      S.push(numSlide({title:"This week — highlights & lowlights",node:movementBlock(d.movement),
-        caveat:(d.movement&&d.movement.since?("Since "+String(d.movement.since).slice(0,10)+" · "):"")+"Org-wide, week-over-week from the snapshot diff."}));
-      var unstaged=sc.pct_staged!=null?Math.round((sc.total||0)*(1-sc.pct_staged)):0;
-      var sfown=sc.pct_salesforce_owned!=null?Math.round((sc.total||0)*sc.pct_salesforce_owned):0;
       var sp=d.se_by_phase||{},spCols=sp.columns||[],spRows=sp.rows||[],held=0,active=0,stale=0,idle=0;
       spRows.forEach(function(r){spCols.forEach(function(c){var v=(r.counts&&r.counts[c])||0;if(c==="Backlog"||c==="On Hold")held+=v;else active+=v;});
         stale+=r.stale_count||0;idle+=r.no_task_activity_count||0;});
-      var orph=(d.orphan_rocketlane_projects&&d.orphan_rocketlane_projects.count)||0;
       var tk=[(lh?("Win-rate "+lh.label+": "+band(lh.w)+" ("+lh.w.won+"W/"+lh.w.lost+"L)"):"Win-rate: —"),usd(totA)+" in open pipeline ("+totC+" opps)"];
       if(spRows.length)tk.push(active+" SE projects in an active phase · "+held+" on hold or backlog (Rocketlane)");
-      if(sc.pct_staged!=null&&sc.pct_staged<0.9)tk.push(pct(sc.pct_staged)+" of opps have a stage — below the 90% target");
       var nx=[];
-      if(unstaged>0)nx.push("Raise stage coverage: ~"+unstaged+" opps unclassified");
-      if(sfown>0)nx.push("Reassign ~"+sfown+" opps owned by \"Salesforce\" to human SEs");
-      if(orph>0)nx.push("Reconcile "+orph+" Rocketlane project(s) with no matching Salesforce opportunity");
       if(stale||idle)nx.push("Review "+stale+" stale and "+idle+" no-activity playbook(s) flagged in the SE × Phase table");
       S.push(closing({takeaways:tk,next:nx,footHTML:provFoot(prov,P)}));
       return S;}
@@ -269,25 +248,23 @@
         subtitle:"Regional pipeline and governance · Template SE",
         credit:{name:"Solution Engineering",role:"· as of "+String(prov.as_of||"").slice(0,10)}}));
       var ov=d.at_risk_overdue||{count:0};
-      S.push(agenda(["Open pipeline","Opps per SE by stage","Opps per SE by phase","Top 5 opportunities","This week — highlights & lowlights","Team hygiene","Read & next steps"]));
+      S.push(agenda(["Open pipeline","Opps per SE by phase","Top 5 opportunities","Past close date","Read & next steps"]));
       var bs=f.by_stage||{};var st=Object.keys(bs).map(function(k){return{k:k,c:bs[k]};}).sort(function(a,b){return (b.c.acv||0)-(a.c.acv||0);});
       var maxA=Math.max.apply(null,st.map(function(x){return x.c.acv||0}).concat([1]));
-      S.push(numSlide({kicker:"Open pipeline",hero:usd(f.open_acv),pink:true,heroLabel:(f.open_count||0)+" open · "+(d.opps||0)+" total",chip:covChip(f._coverage),
+      S.push(numSlide({kicker:"Open pipeline",hero:usd(f.open_acv),pink:true,heroLabel:(f.open_count||0)+" open opportunities",chip:covChip(f._coverage),
         viz:funnelRows(st.map(function(x){return{lab:x.k,val:x.c.acv||0,valTxt:"<b>"+usd(x.c.acv)+"</b> · "+x.c.count};}),maxA),
-        caveat:(d.caveat?d.caveat+" ":"")+(d.no_stage?("⚠ "+d.no_stage+" opps with no stage. "):"")+"ACV shown; GMV omitted (outliers). Region win-rate reported only for Brazil & EMEA-APAC (others n<5)."}));
-      S.push(numSlide({title:"Opportunities per SE by stage",node:matrixTable(d.se_by_stage||{}),
-        caveat:"Volume by SE — not a performance ranking. “No stage” opps sit outside the funnel until classified."}));
+        caveat:d.caveat||""}));
       S.push(numSlide({title:"Opportunities per SE by phase",node:sePhaseTable(d.se_by_phase||{}),
         caveat:((d.se_by_phase&&d.se_by_phase.caveat)||"Phase is inferred from playbook task status, not a native Rocketlane field.")+
           " “Stale” = a later phase task done while an earlier one is still To do. “No activity” = nothing in the playbook has been touched."}));
       S.push(numSlide({title:"Top opportunities by status",node:top5Block(d.top_opps||{}),
-        caveat:"Top 5 by ACV; colour = health (🔴 at risk / 🟡 watch / 🟢 healthy). The strip shows region totals per status."}));
-      S.push(numSlide({title:"This week — highlights & lowlights",node:movementBlock(d.movement),
-        caveat:(d.movement&&d.movement.since?("Since "+String(d.movement.since).slice(0,10)+" · "):"")+"Week-over-week from the snapshot diff."}));
-      var hy=d.hygiene_by_se||{};var ents=Object.keys(hy).sort().map(function(se){var h=hy[se];var c=h.completeness==null?0:h.completeness;return{lab:se+(c<0.7?" ⚠":""),frac:c,txt:pct(c)+" · "+h.total+" opps",tick:0.9};});
-      S.push(numSlide({title:"Team hygiene",viz:meterRows(ents),caveat:"Alphabetical — data completeness, not a performance ranking."}));
-      S.push(closing({takeaways:[usd(f.open_acv)+" in open pipeline ("+(f.open_count||0)+" opps)",ov.count+" opportunity(ies) with a past close date",(d.no_stage||0)+" opps with no stage in the region"],
-        next:["Rebaseline the "+ov.count+" overdue opps (date/stage)","Classify the "+(d.no_stage||0)+" opps with no stage","Align hygiene with SEs below 70%"],
+        caveat:"Top 5 open opportunities by ACV; colour = health (🔴 past close date / 🟡 closing within 14 days or no ACV / 🟢 healthy). The strip counts these 5."}));
+      var ot=e("table");var oh=e("tr");["Opportunity","Stage","Close date","ACV"].forEach(function(c,ix){oh.appendChild(e("th",ix===3?"num":null,c));});ot.appendChild(oh);
+      (ov.opps||[]).forEach(function(o){var r=e("tr");r.appendChild(e("td",null,o.name||"—"));r.appendChild(e("td",null,o.stage||"—"));r.appendChild(e("td",null,o.closed_forecast||"—"));r.appendChild(e("td","num",usd(o.acv)));ot.appendChild(r);});
+      S.push(numSlide({kicker:"Past close date",hero:String(ov.count||0),heroLabel:usd(ov.acv)+" in open opportunities whose close date has passed",node:ot,
+        caveat:"Still open in Salesforce with a close date before today — top 10 by ACV."}));
+      S.push(closing({takeaways:[usd(f.open_acv)+" in open pipeline ("+(f.open_count||0)+" opps)",(ov.count||0)+" opportunity(ies) with a past close date ("+usd(ov.acv)+")"],
+        next:["Rebaseline the "+(ov.count||0)+" overdue opps (date/stage)"],
         footHTML:provFoot(prov,P)}));
       return S;}
 
