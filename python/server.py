@@ -1077,19 +1077,7 @@ def set_artifact_url(view: str, url: str, region: str | None = None) -> dict[str
     return {"ok": True, "key": _url_key(view, region), "url": url}
 
 
-@mcp.tool()
-def render_presentation(view: str, region: str | None = None, se: str | None = None) -> dict[str, Any]:
-    """
-    Build a SELF-CONTAINED HTML presentation artifact (screen-share-ready dashboard) for
-    Template SE numbers. view: 'exec' (org) | 'region' (needs `region`, e.g. "EMEA-APAC")
-    | 'se' (needs `se` email). Returns {html, view, url, instructions}.
-
-    IMPORTANT for the caller: create/redeploy an Artifact whose ENTIRE content is the
-    returned `html`, VERBATIM — never retype numbers, never edit the HTML. Numbers are
-    checksum-protected (a red banner fires if the blob is corrupted). Then call
-    `set_artifact_url(view, url[, region])` with the resulting artifact URL, and (scheduled
-    runs) post that URL to the audience's Slack channel.
-    """
+def _render_presentation_sync(view: str, region: str | None, se: str | None) -> dict[str, Any]:
     if _analyze is None:
         return {"error": "analyze module unavailable next to server.py"}
     if _render is None:
@@ -1137,6 +1125,94 @@ def render_presentation(view: str, region: str | None = None, se: str | None = N
                             "verbatim. Then call set_artifact_url(view, url[, region])."}
 
 
+# Render jobs. A cold exec render takes ~90s (org-wide Rocketlane /tasks fetch), longer
+# than the ~60s an MCP client waits for one tool call — so render_presentation runs the
+# build on a background thread and returns a job_id when it isn't done within
+# wait_seconds; get_render_result collects it. Jobs live in this (long-lived) server
+# process only; an identical request while one is running joins it instead of
+# starting a second build.
+_RENDER_JOBS: dict[str, dict[str, Any]] = {}
+_RENDER_JOBS_LOCK = _threading.Lock()
+_RENDER_MAX_WAIT_S = 50
+
+
+def _render_job_result(job: dict[str, Any], wait_seconds: float) -> dict[str, Any]:
+    done = job["done"].wait(max(0.0, min(float(wait_seconds), _RENDER_MAX_WAIT_S)))
+    if not done:
+        return {"status": "running", "job_id": job["id"],
+                "instructions": "Still building. Call get_render_result(job_id) — it waits up to "
+                                f"{_RENDER_MAX_WAIT_S}s per call — until status is 'done' or an error."}
+    out = dict(job["result"])
+    if "error" in out:
+        return out
+    if job["out_path"]:
+        path = Path(job["out_path"]).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(out.pop("html"), encoding="utf-8")
+        out["html_path"] = str(path)
+        out["instructions"] = (f"The deck was written to {path}. Publish THAT file, unmodified, as "
+                               "the Artifact (redeploy to `url` if set), then call "
+                               "set_artifact_url(view, url[, region]).")
+    return {"status": "done", "job_id": job["id"], **out}
+
+
+@mcp.tool()
+def render_presentation(view: str, region: str | None = None, se: str | None = None,
+                        out_path: str | None = None, wait_seconds: float = 45) -> dict[str, Any]:
+    """
+    Build a SELF-CONTAINED HTML presentation artifact (screen-share-ready dashboard) for
+    Template SE numbers. view: 'exec' (org) | 'region' (needs `region`, e.g. "EMEA-APAC")
+    | 'se' (needs `se` email).
+
+    The build can take longer than one tool call may wait (a cold exec render is ~90s), so
+    it runs in the background: this waits up to `wait_seconds` (max 50) and returns either
+    {status: "done", html | html_path, view, url, instructions} or {status: "running",
+    job_id} — then call get_render_result(job_id) until it is done. Errors come back as
+    {error}.
+
+    Pass `out_path` (a local file path) to have the HTML written there instead of returned
+    inline — returns `html_path`; publish that file as-is, and hand the same path to
+    post_slack_file(path=...). Strongly preferred for scheduled runs: the deck is ~40 KB.
+
+    IMPORTANT for the caller: the Artifact's ENTIRE content must be the HTML, VERBATIM —
+    never retype numbers, never edit it. Numbers are checksum-protected (a red banner fires
+    if the blob is corrupted). Then call `set_artifact_url(view, url[, region])` with the
+    resulting artifact URL, and (scheduled runs) post that URL to the audience.
+    """
+    import time
+    key = json.dumps([view, region, se])
+    with _RENDER_JOBS_LOCK:
+        job = next((j for j in _RENDER_JOBS.values()
+                    if j["key"] == key and not j["done"].is_set()), None)
+        if job is None:
+            job = {"id": uuid.uuid4().hex[:12], "key": key, "out_path": out_path,
+                   "done": _threading.Event(), "result": None, "started": time.time()}
+            _RENDER_JOBS[job["id"]] = job
+
+            def run(j=job):
+                try:
+                    j["result"] = _render_presentation_sync(view, region, se)
+                except Exception as e:  # never leave a job hanging
+                    j["result"] = {"error": f"render failed: {e}"}
+                j["done"].set()
+
+            _threading.Thread(target=run, daemon=True).start()
+        elif out_path:
+            job["out_path"] = out_path
+    return _render_job_result(job, wait_seconds)
+
+
+@mcp.tool()
+def get_render_result(job_id: str, wait_seconds: float = 45) -> dict[str, Any]:
+    """Collect a render_presentation job that returned status "running": waits up to
+    `wait_seconds` (max 50) and returns the same shape as render_presentation."""
+    job = _RENDER_JOBS.get(job_id)
+    if job is None:
+        return {"error": f"unknown job_id {job_id!r} (jobs are lost if the MCP server restarted "
+                         "— call render_presentation again)"}
+    return _render_job_result(job, wait_seconds)
+
+
 @mcp.tool()
 def post_slack_dm(recipient: str, text: str) -> dict[str, Any]:
     """
@@ -1174,14 +1250,16 @@ def post_slack_dm(recipient: str, text: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def post_slack_file(recipient: str, filename: str, content: str, initial_comment: str = "") -> dict[str, Any]:
+def post_slack_file(recipient: str, filename: str, content: str = "", initial_comment: str = "",
+                    path: str | None = None) -> dict[str, Any]:
     """
     Upload a text file (e.g. a render_presentation HTML deck) and share it in a Slack
     DM via the team's bot identity ("SE Co-Pilot Agent"). `recipient` is a Slack user id
     (U...) or an email (resolved via users.lookupByEmail), same as post_slack_dm.
     `content` is the raw file text (e.g. the `html` string render_presentation returns),
-    sent as UTF-8 bytes — not a local file path, this MCP has no access to the caller's
-    filesystem.
+    sent as UTF-8 bytes. Or pass `path` instead: a local file to upload (e.g. the
+    `html_path` render_presentation wrote) — this MCP runs on the same machine as the
+    caller, so this avoids passing a large file through the conversation.
 
     Use this instead of post_slack_dm + an Artifact link when the audience spans more
     than one Claude org/account: an Artifact link is only viewable by accounts in the
@@ -1212,7 +1290,15 @@ def post_slack_file(recipient: str, filename: str, content: str, initial_comment
         return dm
     channel_id = dm["channel_id"]
 
-    body_bytes = content.encode("utf-8")
+    if path:
+        try:
+            body_bytes = Path(path).expanduser().read_bytes()
+        except OSError as e:
+            return {"error": True, "message": f"cannot read {path}: {e}"}
+    elif content:
+        body_bytes = content.encode("utf-8")
+    else:
+        return {"error": True, "message": "pass `content` or `path`"}
 
     try:
         # Step 1: get a pre-signed upload URL + file_id for this filename/size.
