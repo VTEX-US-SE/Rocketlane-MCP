@@ -11,9 +11,7 @@ Kept dependency-free and side-effect-free so the SAME functions can back both th
 """
 from __future__ import annotations
 
-import csv
 import datetime as _dt
-import io
 import re
 from collections import defaultdict
 from typing import Any
@@ -90,235 +88,6 @@ SE_BY_PHASE_COLUMNS = PHASE_BUCKETS + STATUS_ONLY_BUCKETS
 
 def project_status_bucket(status_label: str | None) -> str:
     return PROJECT_STATUS_BUCKET_MAP.get(status_label or "", "Backlog")
-
-# --- Salesforce weekly pipeline import ---------------------------------------
-# Pipeline/stage/financial/owner/region now come from a weekly SF export (see
-# _load_sf_pipeline in server.py — read live from a fixed Drive-synced path, no
-# separate ingest step), not Rocketlane's synced fields — Rocketlane allows
-# manually-created/edited projects that silently diverge from Salesforce
-# (validated 2026-08: a $20M Rocketlane ACV vs a real $67K SF opportunity for the
-# same deal). Rocketlane's only remaining role is se_by_phase (task-derived,
-# joined back in by sfid — see server.py's wiring).
-
-SF_NAME_MAP = {  # Salesforce "Assigned SE" -> Rocketlane display name
-    "Vagner Figueredo": "Vagner Figueredo Silva Junior",
-    "Felipe Dias": "Felipe Dias",
-    "Leandro Dasler": "leandrodasler",
-    "Salvador Romero": "salvadorromero",
-    "Diego cione": "Diego Cione",
-    "Isabella Fagioli": "isabellafagioli",
-    "Carlos Nieto": "Carlos Nieto",
-    "William Jeanne": "williamjeanne",
-    "Joao Guilherme Porto": "joaoguilherme",
-    "Gabriela Marta": "gabrielamarta",
-    "Manuel Palacios": "manuelpalacios",
-    "Afonso Praça": "Afonso Praça",
-    "Kai Brockelt (Inactive)": "Kai Brockelt",
-    "Ana Mororo (Inactive)": "ana mororo",
-    "Djan Magno": "djanmagno",
-    "Noe Eustaquio": "noeeust",
-    "Luisa Braga": "luisabraga",
-    "Carlos Rivero": "Carlos Celis",
-    "Emeka Nwosu": "emekanwosu",
-}
-
-SF_COUNTRY_TO_MACRO = {
-    "Brazil": "Brazil", "Brasil": "Brazil", "brazil": "Brazil",
-    "Mexico": "North LATAM", "México": "North LATAM", "MX": "North LATAM", "Ecuador": "North LATAM",
-    "Colombia": "South LATAM", "Argentina": "South LATAM", "Peru": "South LATAM", "Chile": "South LATAM",
-    "United States": "USA", "USA": "USA", "USa/Canada/Australia": "USA",
-    "Middle East and Africa": "EMEA-APAC", "Germany": "EMEA-APAC", "France": "EMEA-APAC",
-    "Poland": "EMEA-APAC", "Portugal": "EMEA-APAC", "Spain": "EMEA-APAC",
-    "Eastern Europe": "EMEA-APAC", "Italy": "EMEA-APAC", "United Kingdom": "EMEA-APAC",
-    "India": "EMEA-APAC", "Kenya": "EMEA-APAC", "UK": "EMEA-APAC", "Sri Lanka": "EMEA-APAC",
-    "United Arab Emirates": "EMEA-APAC", "Romania": "EMEA-APAC", "Oceania": "EMEA-APAC",
-    "Europe": "EMEA-APAC", "Algeria": "EMEA-APAC", "Africa": "EMEA-APAC",
-}
-
-# Sort-direction glyphs Salesforce/Sheets can bake into a CSV header when that column is
-# actively sorted at export time (see parse_sf_pipeline_csv). Stripped from the END of
-# every header only — never from the middle, so a legitimate header can't be mangled.
-_HEADER_SORT_GLYPHS = "↑↓▲▼△▽"
-
-
-def _sf_amount(raw: str) -> float | None:
-    raw = (raw or "").strip()
-    if raw in ("", "-"):
-        return None
-    try:
-        return float(raw.replace(",", ""))
-    except ValueError:
-        return None
-
-
-def _sf_currency_amount(raw: str) -> tuple[str | None, float | None]:
-    """Parse a currency-prefixed SF field like 'BRL 782,098.20' -> ('BRL', 782098.20).
-    Falls back to (None, _sf_amount(raw)) when there's no recognizable 3-letter code
-    (e.g. the field is already a plain number, like ACV Preview (USD))."""
-    raw = (raw or "").strip()
-    if raw in ("", "-"):
-        return None, None
-    m = re.match(r"^([A-Z]{3})\s+([\d,]+\.?\d*)$", raw)
-    if m:
-        return m.group(1), _sf_amount(m.group(2))
-    return None, _sf_amount(raw)
-
-
-def _implied_amount_usd(amount_raw: str, acv_preview_raw: str, acv_usd: float | None) -> float | None:
-    """Amount has no pre-converted USD column in the export (unlike ACV Preview, which
-    ships both a native and a USD version). Estimate Amount's USD value using the SAME
-    row's own Amount -> ACV Preview implied FX rate (both fields share currency for a
-    given opportunity) rather than a fixed/guessed rate — validated live 2026-08-24
-    against Salesforce's own Kanban column total (which sums Amount, currency-converted):
-    reproduced it to within $1 on a 29-opportunity Commit & Signing sample ($9,379,351.75
-    vs Salesforce's $9,379,352). Returns None only when no rate can be derived AND the
-    currency isn't USD — never a silent guess."""
-    cur, amount_native = _sf_currency_amount(amount_raw)
-    if amount_native is None:
-        return None
-    _, acv_native = _sf_currency_amount(acv_preview_raw)
-    if acv_native and acv_usd:
-        rate = acv_native / acv_usd
-        if rate:
-            return amount_native / rate
-    if cur == "USD" or cur is None:
-        return amount_native
-    return None
-
-
-def _sf_date(raw: str) -> str:
-    """DD/MM/YYYY -> YYYY-MM-DD, or "" if unparseable/blank."""
-    raw = (raw or "").strip()
-    if raw in ("", "-"):
-        return ""
-    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", raw)
-    if not m:
-        return ""
-    d, mo, y = m.groups()
-    return f"{y}-{int(mo):02d}-{int(d):02d}"
-
-
-def sf_row(rec: dict) -> dict:
-    """Normalize one raw SF CSV record into project_row()'s exact shape, so every
-    existing pure aggregation function (pipeline, scorecard, winrate, se_by_stage,
-    hygiene_by_owner, overdue, top_opps/opp_health, dedupe, region_digest, exec_digest)
-    works unchanged. The export now spans the whole VTEX universe (not just the SE
-    team), so any "Assigned SE" not in SF_NAME_MAP is rolled up into a single "Others"
-    owner — never dropped, never itemized by name, keeping se_by_stage/hygiene_by_se
-    scoped to the named SE roster plus one summary bucket for everyone else. The raw
-    name is still surfaced separately via parse_sf_pipeline_csv's unmapped_owners, for
-    validation visibility into who "Others" actually contains."""
-    owner_raw = (rec.get("Assigned SE") or "").strip()
-    stage = (rec.get("Stage") or "").strip()
-    region = (rec.get("Sales Region") or "").strip()
-    lost_reason = (rec.get("Lost Reason") or "").strip()
-    # The export has two columns both literally named "Opportunity ID" (15-char, then
-    # 18-char). csv.DictReader keeps the LAST duplicate column under the shared key
-    # (verified: it does not pandas-style suffix with ".1"), which happens to be the
-    # 18-char id we want.
-    sfid = (rec.get("Opportunity ID") or "").strip()
-    acv_usd = _sf_amount(rec.get("ACV Preview (USD)", ""))
-    return {
-        "name": (rec.get("Opportunity Name") or "").strip() or "(sin nombre)",
-        "archived": False,
-        "stage": stage,
-        "closed": _sf_date(rec.get("Close Date", "")),
-        "acv": acv_usd,
-        "amount_usd": _implied_amount_usd(rec.get("Amount", ""), rec.get("ACV Preview", ""), acv_usd),
-        "gmv": None,
-        "sfid": sfid,
-        "loss": "" if lost_reason in ("", "-") else lost_reason,
-        "cancel": "",
-        "region": region,
-        "macro": SF_COUNTRY_TO_MACRO.get(region, "(no region)"),
-        "tpl": "", "tplname": "",
-        "status": "Completed" if stage in ("Won", "Lost") else "",
-        "owner": SF_NAME_MAP.get(owner_raw, "Others") if owner_raw else "Others",
-        "owner_email": "",
-        "created_by": "",
-        "team_emails": [],
-        "created_ms": None,
-        "updatedAt": None,
-    }
-
-
-def parse_sf_pipeline_csv(csv_text: str) -> tuple[list[tuple[str, dict]], dict]:
-    """Parse the raw weekly SF export text into (items, report) — items are (sfid, row)
-    tuples in project_row()'s shape, ready for every existing pure function. The tuple
-    KEY is the NORMALIZED sfid (norm_sfid(raw)), not the raw 18-char string — this MUST
-    match how Rocketlane's side gets normalized in server.py's join (sfid_to_pid is keyed
-    the same way), otherwise the tasks_by_project re-keying for se_by_phase silently
-    matches nothing. `r["sfid"]` in the row dict keeps the raw value (for display),
-    matching Rocketlane's own project_row() convention of storing raw and normalizing at
-    the call site. `report` surfaces validation signals for the caller (never silently
-    swallowed): unmapped_owners, unmapped_regions, duplicate_sfids, rows_missing_id,
-    total_rows."""
-    reader = csv.DictReader(io.StringIO(csv_text))
-    # Salesforce/Sheets exports have twice baked a sort-direction glyph into whichever
-    # column header was actively sorted at export time (observed live 2026-08 and again
-    # 2026-09: "Stage" -> "Stage↑"), which silently broke every rec.get("Stage")
-    # lookup (empty string for every row). Strip trailing sort-indicator glyphs from
-    # every header so column lookups by name keep working regardless of which column
-    # happens to be sorted next time.
-    reader.fieldnames = [(fn or "").rstrip(_HEADER_SORT_GLYPHS) for fn in reader.fieldnames]
-    items: list[tuple[str, dict]] = []
-    unmapped_owners, unmapped_regions, seen_ids, dupes = set(), set(), set(), set()
-    missing_id = 0
-    for i, rec in enumerate(reader):
-        owner_raw = (rec.get("Assigned SE") or "").strip()
-        region = (rec.get("Sales Region") or "").strip()
-        if owner_raw and owner_raw not in SF_NAME_MAP:
-            unmapped_owners.add(owner_raw)
-        if region and region not in SF_COUNTRY_TO_MACRO:
-            unmapped_regions.add(region)
-        r = sf_row(rec)
-        key = norm_sfid(r["sfid"]) or f"__noid_{i}"
-        if not norm_sfid(r["sfid"]):
-            missing_id += 1
-        if key in seen_ids:
-            dupes.add(key)
-        seen_ids.add(key)
-        items.append((key, r))
-    report = {"total_rows": len(items), "unmapped_owners": sorted(unmapped_owners),
-              "unmapped_regions": sorted(unmapped_regions),
-              "duplicate_sfids": sorted(dupes), "rows_missing_id": missing_id}
-    return items, report
-
-
-SF_PIPELINE_CAVEAT = ("Pipeline, stage, ACV, owner and region come from the weekly "
-                       "Salesforce export, not Rocketlane's synced fields — Rocketlane "
-                       "is used only for se_by_phase. The export spans the whole VTEX "
-                       "universe; owners outside the named SE roster are grouped under "
-                       "\"Others\".")
-
-AMOUNT_METRIC_CAVEAT = ("Pipeline shown here uses \"Amount\" (total contract value), not "
-                         "\"ACV Preview\" (annualized value) — the two are different "
-                         "metrics by design, not a data error; expect Amount to run "
-                         "higher for any multi-year deal.")
-
-
-def with_amount_as_acv(items: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
-    """Return a NEW items list where each row's 'acv' is replaced by its 'amount_usd' —
-    lets every existing ACV-driven function (pipeline, scorecard, se_by_stage, winrate,
-    hygiene_by_owner, top_opps, region_digest, exec_digest, ...) run completely unchanged
-    against "Amount" instead of "ACV Preview (USD)", with zero duplicated logic. Purely
-    additive/non-destructive: copies each row dict, never mutates the original list or
-    its dicts. A row with no resolvable amount_usd gets acv=None — the same "missing
-    data" convention every consumer already handles for a missing ACV."""
-    return [(k, {**r, "acv": r.get("amount_usd")}) for k, r in items]
-
-
-def orphan_rocketlane_projects(rl_items: list[tuple[str, dict]], sf_sfids: set) -> list[dict]:
-    """Rocketlane SE-scoped projects whose sfid has no match in the current SF pipeline
-    export — exactly the failure mode that motivated this whole change (a manually
-    created/edited Rocketlane record disconnected from Salesforce reality). Sorted by
-    ACV descending so the biggest risk shows first."""
-    out = [{"projectId": pid, "name": r["name"], "owner": r["owner"], "stage": r["stage"],
-            "acv": acvn(r["acv"]), "macro": r["macro"]}
-           for pid, r in rl_items if norm_sfid(r["sfid"]) and norm_sfid(r["sfid"]) not in sf_sfids]
-    out.sort(key=lambda x: -(x["acv"] or 0))
-    return out
-
 
 def normalize_macro_region(r: str | None) -> str:
     if not r:
@@ -964,25 +733,6 @@ def _movement(cur_items, prev_items, today):
     return week_movement({p: r for p, r in prev_items}, {p: r for p, r in cur_items}, today)
 
 
-def region_digest(items, macro, today, prev_items=None, tasks_by_project=None, rl_items=None):
-    reg = [(p, r) for p, r in items if r["macro"] == macro]
-    total = len(reg)
-    prev_reg = ([(p, r) for p, r in prev_items if r["macro"] == macro]
-                if prev_items is not None else None)
-    rl_reg = [(p, r) for p, r in (rl_items or []) if r["macro"] == macro]
-    return {"region": macro, "opps": total,
-            "funnel": pipeline(reg, today),
-            "se_by_stage": se_by_stage(reg),
-            "se_by_phase": se_by_phase(rl_reg, tasks_by_project or {}),
-            "top_opps": top_opps(reg, today),
-            "hygiene_by_se": hygiene_by_owner(reg),
-            "at_risk_overdue": overdue(reg, today),
-            "no_stage": sum(1 for _, r in reg if not r["stage"]),
-            "movement": _movement(reg, prev_reg, today),
-            "_coverage": covered("region opps", total, total, today),
-            "caveat": SF_PIPELINE_CAVEAT}
-
-
 def half_windows(today, n=4):
     """Last n calendar-half windows, newest first: [(label, start, end), ...]."""
     yy, hh = int(today[:4]), (1 if int(today[5:7]) <= 6 else 2)
@@ -997,25 +747,108 @@ def half_windows(today, n=4):
     return out
 
 
-def exec_digest(items, today, start=None, end=None, prev_items=None, tasks_by_project=None, rl_items=None):
-    # Win-rate: a trend across recent halves (a single "current half" is near-empty
-    # early in a half — the VP wants the trajectory). Custom window if given. Trend is
-    # capped to the CURRENT YEAR only — we don't report against last year, so a prior-year
-    # half must never sneak in (half_windows(today, 2) is exactly the current year's halves
-    # whether today falls in H1 or H2; the year filter is a defensive belt-and-suspenders,
-    # not strictly needed given n=2, but keeps this correct if n ever changes).
-    if start and end:
-        wr_trend = {"custom": winrate(items, start, end)}
-    else:
-        current_year = today[:4]
-        wr_trend = {label: winrate(items, s, e) for label, s, e in half_windows(today, 2)
-                    if label.endswith(current_year)}
+SE_OPS_CAVEAT = ("Pipeline, stage, ACV and win-rate come from se-copilot-ops-mcp "
+                 "(Salesforce via BigQuery; Platform record type, renewal/E2E/RISE "
+                 "opportunities excluded; ACV Preview in USD) — Rocketlane is used only "
+                 "for se_by_phase.")
+
+
+def _ops_open_block(resp: dict, today: str) -> dict:
+    """get_open_pipeline response (optionally group_by="stage") -> pipeline()'s shape."""
+    acv = resp.get("acv") or {}
+    by_stage = {g["key"]: {"count": g["count"], "acv": round(g["acv"]["value"] or 0), "gmv": 0}
+                for g in resp.get("groups") or [] if g.get("key")}
+    return {"open_count": resp.get("count") or 0, "open_acv": round(acv.get("value") or 0),
+            "by_stage": by_stage, "_coverage": covered("open pipeline", acv.get("n") or 0,
+                                                       acv.get("of") or 0, today)}
+
+
+def _ops_winrate_block(start: str, end: str, winrate_resp: dict, lost_resp: dict) -> dict:
+    """get_winrate + get_top_deals(stage="Lost") responses -> winrate()'s shape. SF close
+    dates are always set, so strict == sensitivity (no closed-without-date population)."""
+    by_count, by_acv = winrate_resp.get("by_count") or {}, winrate_resp.get("by_acv") or {}
+    rate = by_count.get("rate")
+    return {"window": {"from": start, "to": end},
+            "won": by_count.get("won", 0), "lost": by_count.get("lost", 0),
+            "strict": rate, "sensitivity": rate,
+            "won_acv": round(by_acv.get("won_acv") or 0), "lost_acv": round(by_acv.get("lost_acv") or 0),
+            "acv_rate": by_acv.get("rate"), "_coverage": by_count.get("_coverage"),
+            "top_lost": [{"projectId": d["id"], "name": d["name"], "macro": d["region"],
+                          "closed": d["close_date"], "acv": d["acv"]}
+                         for d in lost_resp.get("deals") or []]}
+
+
+def _ops_caveat(stale: dict | None) -> str:
+    caveat = SE_OPS_CAVEAT
+    if stale and stale.get("stale"):
+        caveat += (f" ⚠ The Salesforce→BigQuery sync is stale (gap {stale.get('gap_days')} "
+                   f"day(s)) — treat these numbers as out of date.")
+    return caveat
+
+
+def exec_digest_from_se_ops(today: str, by_region: dict, by_stage: dict, windows: list[dict],
+                            tasks_by_project=None, rl_items=None, stale: dict | None = None) -> dict:
+    """Exec digest fed by se-copilot-ops-mcp responses. No I/O: the caller supplies the
+    get_open_pipeline responses (group_by="region" / "stage") and, per win-rate window
+    (newest first), {"label", "start", "end", "winrate": get_winrate response, "lost":
+    get_top_deals(stage="Lost") response}. Deliberately absent, because the MCP can't
+    supply them: a data-quality scorecard (needs per-opp stage/owner), orphan Rocketlane
+    projects (the ghost-ACV report is capped at 50 rows, so a count would be fictitious),
+    and week-over-week movement (no history)."""
     return {"as_of": today,
-            "data_quality_scorecard": scorecard(items, today),
-            "org_winrate_trend": wr_trend,
-            "movement": _movement(items, prev_items, today),
-            "pipeline_overall": pipeline(items, today),
-            "pipeline_region_stage": {reg: pipeline([(p, r) for p, r in items if r["macro"] == reg], today)
-                                      for reg in sorted({r["macro"] for _, r in items})},
+            "org_winrate_trend": {w["label"]: _ops_winrate_block(w["start"], w["end"], w["winrate"], w["lost"])
+                                  for w in windows},
+            "pipeline_overall": _ops_open_block(by_stage, today),
+            "pipeline_region_stage": {g["key"]: _ops_open_block({"count": g["count"], "acv": g["acv"]}, today)
+                                      for g in by_region.get("groups") or [] if g.get("key")},
             "se_by_phase": se_by_phase(rl_items or [], tasks_by_project or {}),
-            "caveat": SF_PIPELINE_CAVEAT}
+            "caveat": _ops_caveat(stale)}
+
+
+def _ops_deal_health(d: dict, today: str, soon_days: int = 14) -> dict:
+    """opp_health() for one get_top_deals row (open deals only): 🔴 past forecast close,
+    🟡 closing within soon_days or no ACV, else 🟢."""
+    flags = []
+    closed = d.get("close_date")
+    if closed and closed < today:
+        n = _days_between(closed, today)
+        flags.append(("red", f"overdue {n}d" if n is not None else "close date overdue"))
+    elif closed:
+        n = _days_between(today, closed)
+        if n is not None and n <= soon_days:
+            flags.append(("yellow", f"closing in {n}d"))
+    if not d.get("acv"):
+        flags.append(("yellow", "no ACV"))
+    sev = "red" if any(f[0] == "red" for f in flags) else ("yellow" if flags else "green")
+    return {"health": _SEV_EMOJI[sev], "severity": sev, "flags": [f[1] for f in flags]}
+
+
+def _ops_deal_row(d: dict) -> dict:
+    return {"projectId": d["id"], "name": d["name"], "stage": d.get("stage_name") or "(no stage)",
+            "acv": d.get("acv"), "closed_forecast": d.get("close_date"), "macro": d.get("region")}
+
+
+def region_digest_from_se_ops(region: str, today: str, by_stage: dict, top: dict,
+                              overdue_totals: dict, overdue_top: dict,
+                              tasks_by_project=None, rl_items=None, stale: dict | None = None) -> dict:
+    """Region digest fed by se-copilot-ops-mcp responses, all already filtered to `region`:
+    get_open_pipeline(group_by="stage") over the open-pipeline window (by_stage),
+    get_top_deals over that window (top), and get_open_pipeline / get_top_deals with a
+    close date before today (overdue_totals / overdue_top — open deals past their forecast
+    close). Deliberately absent, because the MCP has no owner or history: SE×Stage,
+    hygiene by SE, orphan Rocketlane projects and week-over-week movement. se_by_phase is
+    Rocketlane-only, filtered to the region's projects."""
+    deals = [{**_ops_deal_row(d), **_ops_deal_health(d, today)} for d in top.get("deals") or []]
+    summary = {"red": 0, "yellow": 0, "green": 0}
+    for d in deals:
+        summary[d["severity"]] += 1
+    ov_acv = overdue_totals.get("acv") or {}
+    rl_reg = [(p, r) for p, r in (rl_items or []) if r["macro"] == region]
+    return {"region": region,
+            "funnel": _ops_open_block(by_stage, today),
+            "se_by_phase": se_by_phase(rl_reg, tasks_by_project or {}),
+            "top_opps": {"summary": summary, "top": deals},
+            "at_risk_overdue": {"count": overdue_totals.get("count") or 0,
+                                "acv": round(ov_acv.get("value") or 0),
+                                "opps": [_ops_deal_row(d) for d in overdue_top.get("deals") or []]},
+            "caveat": _ops_caveat(stale)}

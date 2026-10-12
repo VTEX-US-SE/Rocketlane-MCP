@@ -597,88 +597,79 @@ def _digest_prov(out: dict, pulled: dict) -> dict:
 @mcp.tool()
 def get_exec_digest(from_date: str | None = None, to_date: str | None = None) -> dict[str, Any]:
     """
-    VP dashboard, server-side → small result: data-quality scorecard by Macro Region, org
-    win-rate TREND across recent halves (strict + sensitivity), the Region×Stage
-    open-pipeline funnel, and org-wide SE×Phase (task-inferred playbook progress, each SE
-    tagged with the region(s) they have projects in). Every block carries its
-    coverage/denominator. Optional from_date/to_date ('YYYY-MM-DD') pins the win-rate
-    window instead of the trend.
+    VP dashboard, server-side → small result: org win-rate TREND across the current
+    year's halves (with the top lost opportunities of each), open pipeline by region and
+    by stage, and org-wide SE×Phase (task-inferred playbook progress, each SE tagged with
+    the region(s) they have projects in). Every block carries its coverage/denominator.
+    Optional from_date/to_date ('YYYY-MM-DD') pins the win-rate window instead of the trend.
 
-    Pipeline, stage, ACV, owner and region come from the weekly Salesforce export (fixed
-    Drive-synced path — see validate_sf_pipeline), NOT Rocketlane's synced fields:
-    Rocketlane allows manually-created/edited projects that silently diverge from
-    Salesforce (a real $20M-vs-$67K discrepancy motivated this). See
-    orphan_rocketlane_projects for Rocketlane records with no matching SF opportunity,
-    exactly the failure mode above.
+    Pipeline, stage, ACV Preview (USD), win-rate and top losses come from
+    se-copilot-ops-mcp (Salesforce via BigQuery: Platform record type, renewal/E2E/RISE
+    opportunities excluded; open pipeline = close date this year + next) — NOT Rocketlane's
+    synced fields, which can silently diverge from Salesforce (a real $20M-vs-$67K
+    discrepancy motivated this). Needs SE_OPS_MCP_TOKEN or SE_OPS_MCP_HEADERS_FILE; there is
+    no other pipeline source — a failed or stale source is an error or an explicit
+    warning in `caveat`, never a silent mix. Not available from this source (the MCP has no
+    owner or history): the data-quality scorecard, orphan_rocketlane_projects, and
+    week-over-week movement.
 
-    se_by_phase is the one exception: it is computed ENTIRELY from Rocketlane's own
-    project list and project status, never joined through Salesforce — an sfid join would
-    silently lose most Rocketlane projects (many have no matching SF row) and misreport
-    them as "Unknown". Columns: Discovery Meeting / RFP / Demo / POC / Solution Design /
-    Closing/Handover / Unknown (phase, only for projects whose Rocketlane status is "In
-    progress") plus Backlog / On Hold / Completed / Cancelled (project status, everyone
-    else — no phase is inferred for a project that isn't active). Spans the WHOLE org
-    (not one region) — the task fetch is correspondingly larger than get_region_digest's,
-    still cache-first, bounded-concurrency, and limited to "In progress" projects only.
-    Partial per-project fetch failures never fail the call; that project buckets "Unknown"
-    and the count is at _provenance.task_fetch_failures.
+    se_by_phase is computed ENTIRELY from Rocketlane's own project list and project status,
+    never joined through Salesforce — an sfid join would silently lose most Rocketlane
+    projects (many have no matching SF row) and misreport them as "Unknown". Columns:
+    Discovery Meeting / RFP / Demo / POC / Solution Design / Closing/Handover / Unknown
+    (phase, only for projects whose Rocketlane status is "In progress") plus Backlog /
+    On Hold (project status; Completed/Cancelled are excluded). Spans the WHOLE org (not
+    one region) — the task fetch is correspondingly larger than get_region_digest's, still
+    cache-first, bounded-concurrency, and limited to "In progress" projects only. Partial
+    per-project fetch failures never fail the call; that project buckets "Unknown" and the
+    count is at _provenance.task_fetch_failures.
     """
     if _analyze is None:
         return {"error": "analyze module unavailable next to server.py"}
-    sfb = _sf_backed_digest(None)
-    if isinstance(sfb, dict) and "error" in sfb:
-        return sfb
-    sf_items, tasks_by_project, failed, orphans, sf_as_of, rl_items_scope = sfb
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
-    out = _analyze.exec_digest(sf_items, today, from_date, to_date,
-                               prev_items=None, tasks_by_project=tasks_by_project,
-                               rl_items=rl_items_scope)
-    out["orphan_rocketlane_projects"] = {"count": len(orphans), "top": orphans[:10]}
-    out["_provenance"] = {"source": "Salesforce weekly export + Rocketlane (se_by_phase only)",
-                          "sf_universe": len(sf_items), "sf_pipeline_as_of": sf_as_of,
-                          "task_fetch_failures": len(failed)}
+    built = _ops_backed_exec_digest(today, from_date, to_date)
+    if isinstance(built, dict):
+        return built
+    out, failed, ops_as_of, window = built
+    out["_provenance"] = {"source": _OPS_SOURCE, "se_ops_as_of": ops_as_of,
+                          "open_pipeline_window": window, "task_fetch_failures": len(failed)}
     return out
 
 
 @mcp.tool()
 def get_region_digest(macro_region: str) -> dict[str, Any]:
     """
-    Macro-Region leader digest, server-side: open-pipeline funnel by stage,
-    data-completeness by SE, SE x Stage AND SE x Phase (task-inferred playbook progress)
-    breakdowns, and at-risk = opps whose Opp Closed Date is past but stage is still open.
+    Macro-Region leader digest, server-side: open-pipeline funnel by stage, top 5 open
+    opportunities by ACV with a health status (🔴 past forecast close / 🟡 closing within
+    14 days or no ACV / 🟢), at-risk = open opportunities whose close date is already past
+    (count, ACV and the top 10), and SE x Phase (task-inferred playbook progress).
     macro_region e.g. "EMEA-APAC", "Brazil", "North LATAM", "South LATAM", "USA".
 
-    Pipeline, stage, ACV, owner and region come from the weekly Salesforce export (fixed
-    Drive-synced path — see validate_sf_pipeline), NOT Rocketlane's synced fields — see
-    get_exec_digest's docstring for why. orphan_rocketlane_projects surfaces Rocketlane
-    records in this region with no matching SF opportunity.
+    Pipeline, stage, ACV and close dates come from se-copilot-ops-mcp (Salesforce via
+    BigQuery — see get_exec_digest's docstring for scope and why not Rocketlane). Needs
+    SE_OPS_MCP_TOKEN or SE_OPS_MCP_HEADERS_FILE; a failed source is an error and a stale
+    one is flagged in `caveat`. Not available from this source (the MCP has no owner or
+    history): SE x Stage, hygiene by SE, orphan Rocketlane projects, and week-over-week
+    movement.
 
-    se_by_phase is the one exception: computed ENTIRELY from Rocketlane's own project
-    list and project status (not joined through Salesforce — see get_exec_digest's
-    docstring). Columns: the 6 phase buckets (only for projects whose Rocketlane status
-    is "In progress") plus Backlog / On Hold / Completed / Cancelled for everyone else.
-    Phase is inferred from playbook task completion status via a bounded-concurrency
-    /tasks fetch per "In progress" project, cached ~15 min in
-    ~/.cache/rocketlane/tasks_cache.json. A per-project task-fetch failure never fails
-    the whole call — that project just buckets "Unknown"; failure count is at
-    _provenance.task_fetch_failures.
+    se_by_phase is computed ENTIRELY from Rocketlane's own project list and project status
+    (see get_exec_digest's docstring), scoped to this region's projects. Phase is inferred
+    from playbook task completion via a bounded-concurrency /tasks fetch per "In progress"
+    project, cached ~15 min in ~/.cache/rocketlane/tasks_cache.json. A per-project
+    task-fetch failure never fails the whole call — that project just buckets "Unknown";
+    failure count is at _provenance.task_fetch_failures.
     """
     if _analyze is None:
         return {"error": "analyze module unavailable next to server.py"}
-    sfb = _sf_backed_digest(macro_region)
-    if isinstance(sfb, dict) and "error" in sfb:
-        return sfb
-    sf_items, tasks_by_project, failed, orphans, sf_as_of, rl_items_scope = sfb
     import datetime as _dt
     today = _dt.datetime.now().strftime("%Y-%m-%d")
-    out = _analyze.region_digest(sf_items, macro_region, today,
-                                 prev_items=None, tasks_by_project=tasks_by_project,
-                                 rl_items=rl_items_scope)
-    out["orphan_rocketlane_projects"] = {"count": len(orphans), "top": orphans[:10]}
-    out["_provenance"] = {"source": "Salesforce weekly export + Rocketlane (se_by_phase only)",
-                          "sf_universe": len(sf_items), "sf_pipeline_as_of": sf_as_of,
-                          "task_fetch_failures": len(failed)}
+    built = _ops_backed_region_digest(macro_region, today)
+    if isinstance(built, dict):
+        return built
+    out, failed, ops_as_of, window = built
+    out["_provenance"] = {"source": _OPS_SOURCE, "se_ops_as_of": ops_as_of,
+                          "open_pipeline_window": window, "task_fetch_failures": len(failed)}
     return out
 
 
@@ -738,55 +729,6 @@ def _load_tasks_cache() -> dict:
 def _save_tasks_cache(cache: dict) -> None:
     _TASKS_CACHE_STORE.parent.mkdir(parents=True, exist_ok=True)
     _TASKS_CACHE_STORE.write_text(json.dumps(cache, indent=2))
-
-
-_SF_PIPELINE_PATH_RAW = os.environ.get("SF_PIPELINE_PATH")
-_SF_PIPELINE_PATH = Path(_SF_PIPELINE_PATH_RAW) if _SF_PIPELINE_PATH_RAW else None
-
-
-def _sf_pipeline_missing_error() -> str:
-    """No hardcoded fallback path on purpose — this MCP config is shared across every SE's
-    own Claude Desktop install, and a path baked in for one person's machine/Drive account
-    would silently break (or worse, silently point at the wrong file) for everyone else.
-    SF_PIPELINE_PATH must be set per-machine, e.g. in that install's MCP server env block."""
-    if _SF_PIPELINE_PATH is None:
-        return ("SF_PIPELINE_PATH environment variable is not set — point it at this "
-                 "machine's local Drive-synced weekly Salesforce export (set it in Claude "
-                 "Desktop's MCP server config env block, then restart Claude Desktop).")
-    return f"SF pipeline file not found at {_SF_PIPELINE_PATH} — check Drive sync"
-
-
-def _load_sf_pipeline():
-    """Read + parse the weekly SF export directly from its Drive-synced path (see
-    SF_PIPELINE_PATH / _sf_pipeline_missing_error) — no caching, no separate ingest step:
-    the file is small (~375 rows) so re-parsing on every call is negligible cost and
-    always reflects whatever Drive last synced. Returns {"items", "report", "as_of"}
-    (as_of = the file's own last-modified time, the real freshness signal) or None if
-    SF_PIPELINE_PATH isn't set, or the path doesn't exist (Drive not synced on this
-    machine, or the file was moved)."""
-    if _SF_PIPELINE_PATH is None or not _SF_PIPELINE_PATH.is_file():
-        return None
-    text = _SF_PIPELINE_PATH.read_text(encoding="utf-8-sig")
-    items, report = _analyze.parse_sf_pipeline_csv(text)
-    import datetime as _dt
-    as_of = _dt.datetime.fromtimestamp(_SF_PIPELINE_PATH.stat().st_mtime).isoformat()
-    return {"items": items, "report": report, "as_of": as_of}
-
-
-@mcp.tool()
-def validate_sf_pipeline() -> dict[str, Any]:
-    """Quick read-only check of the current weekly Salesforce pipeline export (path set via
-    the required SF_PIPELINE_PATH env var — this machine's local Drive-synced file) — row
-    count, any owner name or country not yet in SF_NAME_MAP/SF_COUNTRY_TO_MACRO
-    (analyze.py), duplicate or missing Opportunity IDs, and the file's last-modified time.
-    Does NOT pull Rocketlane — use this for a fast sanity check right after the weekly
-    file refreshes, before running get_exec_digest/get_region_digest."""
-    if _analyze is None:
-        return {"error": "analyze module unavailable next to server.py"}
-    sf = _load_sf_pipeline()
-    if sf is None:
-        return {"error": _sf_pipeline_missing_error()}
-    return {"as_of": sf["as_of"], "source_file": str(_SF_PIPELINE_PATH), **sf["report"]}
 
 
 import threading as _threading  # noqa: E402
@@ -882,45 +824,178 @@ def _fetch_tasks_bounded(project_ids: list[str], max_workers: int = 8) -> tuple[
     return tasks_by_project, failed
 
 
-def _sf_backed_digest(macro_filter: str | None):
-    """Read the weekly SF pipeline export (fixed Drive-synced path) for
-    pipeline/stage/ACV/owner/region, and separately pull Rocketlane's own SE project list
-    for se_by_phase and orphan detection. se_by_phase is intentionally NOT joined through
-    Salesforce (an sfid join loses ~70% of Rocketlane projects that have no matching SF
-    row, which used to collapse them all into a false "Unknown" phase) — it runs entirely
-    on Rocketlane's own item list and Rocketlane's own project id, keyed straight off
-    _fetch_tasks_bounded with no re-keying. Only "In progress" projects need a task fetch
-    at all (project_status_bucket) — Backlog/On Hold/Completed/Cancelled are counted by
-    status alone, no phase to infer.
-
-    orphan_rocketlane_projects (Rocketlane records with no matching SF opportunity) is the
-    governance signal this whole change exists to catch: a manually-created/edited
-    Rocketlane project disconnected from Salesforce reality. Returns
-    (sf_items, tasks_by_project, failed, orphans, sf_as_of, rl_items_scope) or an
-    {"error": ...} dict."""
-    sf = _load_sf_pipeline()
-    if sf is None:
-        return {"error": _sf_pipeline_missing_error()}
-    sf_items = sf["items"]
-    if macro_filter:
-        sf_items = [(sfid, r) for sfid, r in sf_items if r["macro"] == macro_filter]
-    sf_sfids = {_analyze.norm_sfid(r["sfid"]) for _, r in sf_items if _analyze.norm_sfid(r["sfid"])}
-
+def _rl_se_phase_inputs(macro_filter: str | None):
+    """Rocketlane's own SE project list (optionally one macro region) plus the tasks
+    se_by_phase needs. Only "In progress" projects need a task fetch
+    (project_status_bucket) — everything else is counted by status alone. Returns
+    (rl_items_scope, tasks_by_project, failed_project_ids) or an {"error": ...} dict."""
     rl_pulled = _pull_all_projects()
     if "error" in rl_pulled:
         return rl_pulled
     rl_items = _se_items(rl_pulled)
     if macro_filter:
-        rl_items_scope = [(pid, r) for pid, r in rl_items if r["macro"] == macro_filter]
-    else:
-        rl_items_scope = rl_items
-
-    pids_needed = sorted({pid for pid, r in rl_items_scope
+        rl_items = [(pid, r) for pid, r in rl_items if r["macro"] == macro_filter]
+    pids_needed = sorted({pid for pid, r in rl_items
                           if _analyze.project_status_bucket(r.get("status")) == "In progress"})
     tasks_by_project, failed = _fetch_tasks_bounded(pids_needed)
+    return rl_items, tasks_by_project, failed
 
-    orphans = _analyze.orphan_rocketlane_projects(rl_items_scope, sf_sfids)
-    return sf_items, tasks_by_project, failed, orphans, sf["as_of"], rl_items_scope
+
+_SE_OPS_URL = os.environ.get("SE_OPS_MCP_URL") or "https://se-copilot-ops-mcp-796198564015.us-east1.run.app/mcp"
+_SE_OPS_TIMEOUT_S = 60
+
+
+def _se_ops_headers() -> dict[str, str] | None:
+    """Auth headers for se-copilot-ops-mcp: SE_OPS_MCP_TOKEN (bearer) first, else
+    SE_OPS_MCP_HEADERS_FILE (the 'Header: value' per-line file mcp-remote also reads).
+    None if neither is configured. Never logged."""
+    token = os.environ.get("SE_OPS_MCP_TOKEN", "").strip()
+    if token:
+        return {"Authorization": "Bearer " + token}
+    path = os.environ.get("SE_OPS_MCP_HEADERS_FILE", "").strip()
+    if not path:
+        return None
+    headers: dict[str, str] = {}
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and ":" in line:
+                name, value = line.split(":", 1)
+                headers[name.strip()] = value.strip()
+    except OSError:
+        return None
+    return headers or None
+
+
+def _se_ops_call(tool: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Call one se-copilot-ops-mcp tool over its stateless JSON-RPC HTTP endpoint. Returns
+    the tool's own JSON result, or {"error": ...} — never raises."""
+    headers = _se_ops_headers()
+    if headers is None:
+        return {"error": "se-copilot-ops-mcp credentials not found: set SE_OPS_MCP_TOKEN, or "
+                         "SE_OPS_MCP_HEADERS_FILE (a file of 'Header: value' lines)"}
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": tool, "arguments": arguments or {}}}).encode("utf-8")
+    req = urllib.request.Request(
+        _SE_OPS_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream", **headers})
+    try:
+        with urllib.request.urlopen(req, timeout=_SE_OPS_TIMEOUT_S, context=_SSL_CONTEXT) as resp:
+            msg = json.loads(resp.read().decode("utf-8"))
+        if "error" in msg:
+            return {"error": f"se-copilot-ops-mcp {tool}: {(msg['error'] or {}).get('message', msg['error'])}"}
+        result = msg["result"]
+        text = result["content"][0]["text"]
+    except urllib.error.HTTPError as e:
+        return {"error": f"se-copilot-ops-mcp {tool}: HTTP {e.code}"}
+    except (urllib.error.URLError, TimeoutError, KeyError, IndexError, ValueError) as e:
+        return {"error": f"se-copilot-ops-mcp {tool}: {e}"}
+    try:
+        out = json.loads(text)
+    except ValueError:
+        return {"error": f"se-copilot-ops-mcp {tool}: {text[:200]}"}
+    if result.get("isError") and "error" not in out:
+        return {"error": f"se-copilot-ops-mcp {tool}: {text[:200]}"}
+    return out
+
+
+def _se_ops_batch(jobs: dict[str, tuple[str, dict]]):
+    """Run several se-copilot-ops-mcp calls in parallel, always adding get_data_freshness
+    as "freshness". Returns ({key: result}, stale) or an {"error": ...} dict if any call
+    failed — one failed call fails the whole report, never a partial mix."""
+    import concurrent.futures as cf
+    jobs = {"freshness": ("get_data_freshness", {}), **jobs}
+    with cf.ThreadPoolExecutor(max_workers=6) as ex:
+        futures = {k: ex.submit(_se_ops_call, tool, args) for k, (tool, args) in jobs.items()}
+        res = {k: f.result() for k, f in futures.items()}
+    errors = [r["error"] for r in res.values() if "error" in r]
+    if errors:
+        return {"error": "; ".join(errors)}
+    tables = res["freshness"].get("tables") or []
+    stale = {"stale": bool(res["freshness"].get("stale")),
+             "gap_days": max([t.get("gap_days") or 0 for t in tables] or [0])}
+    return res, stale
+
+
+def _open_window(today: str) -> dict[str, str]:
+    """Open-pipeline close-date window: this year + next (the VP definition), explicit so
+    the report is deterministic."""
+    year = int(today[:4])
+    return {"from": f"{year}-01-01", "to": f"{year + 1}-12-31"}
+
+
+def _ops_backed_exec_digest(today: str, from_date: str | None, to_date: str | None):
+    """Exec digest fed by se-copilot-ops-mcp (Salesforce via BigQuery) for pipeline, stage,
+    ACV, win-rate and top losses, plus Rocketlane for se_by_phase. The SE MCP goes first so
+    missing credentials or an outage fail fast, before the slow Rocketlane pull. Returns
+    (digest, failed_task_fetches, ops_as_of, window) or an {"error": ...} dict."""
+    window = _open_window(today)
+    if from_date and to_date:
+        wr_windows = [("custom", from_date, to_date)]
+    else:
+        wr_windows = [(label, s, e) for label, s, e in _analyze.half_windows(today, 2)
+                      if label.endswith(today[:4])]
+    open_args = {"start_date": window["from"], "end_date": window["to"]}
+    jobs: dict[str, tuple[str, dict]] = {
+        "by_region": ("get_open_pipeline", {**open_args, "group_by": "region"}),
+        "by_stage": ("get_open_pipeline", {**open_args, "group_by": "stage"}),
+    }
+    for label, s, e in wr_windows:
+        jobs["wr:" + label] = ("get_winrate", {"start_date": s, "end_date": e})
+        jobs["lost:" + label] = ("get_top_deals", {"stage": "Lost", "start_date": s, "end_date": e, "limit": 10})
+    batch = _se_ops_batch(jobs)
+    if isinstance(batch, dict):
+        return batch
+    res, stale = batch
+    if "groups" not in res["by_region"] or "groups" not in res["by_stage"]:
+        return {"error": "se-copilot-ops-mcp is too old: get_open_pipeline has no group_by support"}
+
+    rl = _rl_se_phase_inputs(None)
+    if isinstance(rl, dict):
+        return rl
+    rl_items_scope, tasks_by_project, failed = rl
+    windows = [{"label": l, "start": s, "end": e, "winrate": res["wr:" + l], "lost": res["lost:" + l]}
+               for l, s, e in wr_windows]
+    digest = _analyze.exec_digest_from_se_ops(today, res["by_region"], res["by_stage"], windows,
+                                              tasks_by_project, rl_items_scope, stale)
+    ops_as_of = (res["by_stage"].get("_provenance") or {}).get("as_of")
+    return digest, failed, ops_as_of, window
+
+
+def _ops_backed_region_digest(region: str, today: str):
+    """Region digest fed by se-copilot-ops-mcp (open pipeline by stage, top deals, open
+    deals past their forecast close date) plus Rocketlane for se_by_phase. Same
+    fail-fast/no-fallback rules as _ops_backed_exec_digest. Returns
+    (digest, failed_task_fetches, ops_as_of, window) or an {"error": ...} dict."""
+    import datetime as _dt
+    window = _open_window(today)
+    yesterday = (_dt.date.fromisoformat(today) - _dt.timedelta(days=1)).isoformat()
+    in_window = {"region": region, "start_date": window["from"], "end_date": window["to"]}
+    overdue = {"region": region, "start_date": "2000-01-01", "end_date": yesterday}
+    batch = _se_ops_batch({
+        "by_stage": ("get_open_pipeline", {**in_window, "group_by": "stage"}),
+        "top": ("get_top_deals", {**in_window, "limit": 5}),
+        "overdue": ("get_open_pipeline", overdue),
+        "overdue_top": ("get_top_deals", {**overdue, "limit": 10}),
+    })
+    if isinstance(batch, dict):
+        return batch
+    res, stale = batch
+    if "groups" not in res["by_stage"]:
+        return {"error": "se-copilot-ops-mcp is too old: get_open_pipeline has no group_by support"}
+
+    rl = _rl_se_phase_inputs(region)
+    if isinstance(rl, dict):
+        return rl
+    rl_items_scope, tasks_by_project, failed = rl
+    digest = _analyze.region_digest_from_se_ops(region, today, res["by_stage"], res["top"],
+                                                res["overdue"], res["overdue_top"],
+                                                tasks_by_project, rl_items_scope, stale)
+    ops_as_of = (res["by_stage"].get("_provenance") or {}).get("as_of")
+    return digest, failed, ops_as_of, window
+
+
+_OPS_SOURCE = "se-copilot-ops-mcp (Salesforce via BigQuery) + Rocketlane (se_by_phase only)"
 
 
 @mcp.tool()
@@ -1023,27 +1098,21 @@ def render_presentation(view: str, region: str | None = None, se: str | None = N
     now = _dt.datetime.now()
     today = now.strftime("%Y-%m-%d")
     task_fetch_failures = 0
-    sf_as_of = None
+    ops_as_of = None
     if view == "exec":
-        sfb = _sf_backed_digest(None)
-        if isinstance(sfb, dict) and "error" in sfb:
-            return sfb
-        sf_items, tasks_by_project, failed, orphans, sf_as_of, rl_items_scope = sfb
+        built = _ops_backed_exec_digest(today, None, None)
+        if isinstance(built, dict):
+            return built
+        digest, failed, ops_as_of, _window = built
         task_fetch_failures = len(failed)
-        digest = _analyze.exec_digest(sf_items, today, prev_items=None,
-                                      tasks_by_project=tasks_by_project, rl_items=rl_items_scope)
-        digest["orphan_rocketlane_projects"] = {"count": len(orphans), "top": orphans[:10]}
     elif view == "region":
         if not region:
             return {"error": "region required for view='region' (e.g. 'EMEA-APAC')"}
-        sfb = _sf_backed_digest(region)
-        if isinstance(sfb, dict) and "error" in sfb:
-            return sfb
-        sf_items, tasks_by_project, failed, orphans, sf_as_of, rl_items_scope = sfb
+        built = _ops_backed_region_digest(region, today)
+        if isinstance(built, dict):
+            return built
+        digest, failed, ops_as_of, _window = built
         task_fetch_failures = len(failed)
-        digest = _analyze.region_digest(sf_items, region, today, prev_items=None,
-                                        tasks_by_project=tasks_by_project, rl_items=rl_items_scope)
-        digest["orphan_rocketlane_projects"] = {"count": len(orphans), "top": orphans[:10]}
     elif view == "se":
         if not se:
             return {"error": "se (email) required for view='se'"}
@@ -1055,8 +1124,8 @@ def render_presentation(view: str, region: str | None = None, se: str | None = N
     else:
         return {"error": "view must be 'exec' | 'region' | 'se'"}
     if view in ("region", "exec"):
-        prov = {"source": "Salesforce weekly export + Rocketlane (se_by_phase only)",
-                "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"), "sf_pipeline_as_of": sf_as_of,
+        prov = {"source": _OPS_SOURCE,
+                "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"), "data_as_of": ops_as_of,
                 "task_fetch_failures": task_fetch_failures}
     else:
         prov = {"source": "local MCP api-key", "as_of": now.strftime("%Y-%m-%dT%H:%M:%S"),
